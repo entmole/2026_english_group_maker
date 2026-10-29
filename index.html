@@ -5,11 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>함께 배우는 모둠 만들기</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<!-- QR 코드 생성 / 태블릿 실시간 연결(WebRTC P2P) -->
+<!-- QR 코드 생성 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@600;700&family=Quicksand:wght@500;600&display=swap" rel="stylesheet">
 <script>
   if (window.tailwind) tailwind.config = {
     theme: { extend: { fontFamily: {
@@ -101,11 +100,32 @@
   .fade-in { animation: fade .55s ease both; }
   @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .blur-name { filter: blur(7px); user-select: none; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
   .pulse { animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
   #qrBox img, #qrBox canvas, #qrBig img, #qrBig canvas { width: 100%; height: auto; image-rendering: pixelated; }
   #toast { transition: opacity .25s, transform .25s; }
+
+  /* ===== 모둠 이름표 (A4 세로, 접이식) =====
+     위 25% 여백 → 역할 칸(180° 회전) → Team name 칸 → 아래 여백.
+     가운데 두 칸이 접었을 때 앞·뒷면이 됩니다. */
+  .tag-sheet {
+    position: relative; width: 100%; aspect-ratio: 210 / 297; overflow: hidden;
+    background: #fff; color: #111; container-type: inline-size;
+    font-family: 'Quicksand', 'Noto Sans KR', sans-serif; font-weight: 500;
+    box-shadow: 0 6px 24px rgba(15,23,42,.12); border-radius: 6px;
+  }
+  .tag-band { position: absolute; left: 0; right: 0; border-top: .5cqw solid #111; }
+  .tag-roles { top: 25%; height: 25.7%; }
+  .tag-team { top: 50.7%; height: 25.4%; border-bottom: .5cqw solid #111; }
+  .tag-flip {
+    position: absolute; inset: 0; transform: rotate(180deg);
+    display: grid; grid-template-columns: 1fr 1fr; align-content: center; row-gap: 11cqw; padding: 0 5cqw 0 8cqw;
+  }
+  .tag-role { display: flex; align-items: baseline; gap: 1.6cqw; font-size: 3.6cqw; white-space: nowrap; min-width: 0; }
+  .tag-role b { font-family: 'Noto Sans KR', sans-serif; font-weight: 700; font-size: 5.2cqw; overflow: hidden; text-overflow: ellipsis; }
+  .tag-label { position: absolute; left: 2.8cqw; top: 3cqw; font-size: 3.6cqw; }
+  .tag-no { position: absolute; right: 3cqw; bottom: 2.5cqw; font-size: 2.2cqw; color: #b8b8b8; font-family: 'Noto Sans KR', sans-serif; }
 
   @media (prefers-reduced-motion: reduce) {
     .blobs span, .fade-in, .pulse { animation: none !important; }
@@ -117,8 +137,9 @@
   }
 
   /* ===== 인쇄 ===== */
+  @page { size: A4; margin: 10mm; }
+  @page tagpage { size: A4; margin: 0; }
   @media print {
-    @page { size: A4; margin: 10mm; }
     * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     body { background: #fff !important; }
     .blobs, .no-print { display: none !important; }
@@ -134,6 +155,12 @@
     body.print-all .contract header { padding-bottom: 2mm !important; margin-bottom: 2mm !important; }
     body.print-all .contract section { margin-bottom: 2mm !important; }
     body.print-all .sig { display: none !important; }
+    /* 이름표: 모둠별 A4 한 장, 여백 0 */
+    body.print-tags #tags { display: block !important; }
+    body.print-tags .tag-card { display: block; padding: 0 !important; border: 0 !important; background: none !important; border-radius: 0 !important; }
+    body.print-tags .tag-ui { display: none !important; }
+    body.print-tags .tag-sheet { page: tagpage; width: 210mm; height: 296mm; aspect-ratio: auto; box-shadow: none; border-radius: 0; break-after: page; }
+    body.print-tags .tag-card:last-child .tag-sheet { break-after: auto; }
   }
 </style>
 </head>
@@ -146,7 +173,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 id="appTitle" class="font-serif text-xl sm:text-2xl font-bold">함께 배우는 모둠 만들기</h1>
-        <p id="appSub" class="text-xs sm:text-sm text-slate-500 mt-0.5">Helper Pledge · Blind Grouping · Team Learning Contract</p>
+        <p id="appSub" class="text-xs sm:text-sm text-slate-500 mt-0.5">Helper Pledge · Blind Grouping · Team Name Tag</p>
       </div>
       <button id="resetBtn" data-act="reset" class="btn btn-glass text-sm px-4 py-1.5">새로 시작</button>
     </div>
@@ -166,8 +193,9 @@
 const GROUPS = 6;
 const KEY = 'coop-grouping-v2';
 const STUDENT_KEY = 'coop-student-gc';            // 학생 태블릿: 학년·반 기억(공용 태블릿 편의)
-const PEER_PREFIX = 'eng-coop-2026-';              // PeerJS 방 ID 접두어(다른 앱과 충돌 방지)
-const PEER_OPTS = { debug: 0 };                    // 자체 PeerJS 서버를 쓰려면 host/port/path 지정
+// 교사 PC ↔ 태블릿 중계 서버(ntfy, HTTPS 443). 자체 ntfy 서버가 있으면 주소만 바꾸면 됩니다.
+const RELAY = 'https://ntfy.sh';
+const CODE_LEN = 8;
 const PROMISE = '우리는 서로 틀리는 것을 비웃지 않고, 끝까지 질문하며 함께 배웁니다.';
 const EXAMPLES = [
   '발음이 어려운 친구를 끝까지 기다려 주기',
@@ -177,6 +205,20 @@ const EXAMPLES = [
   '틀려도 괜찮다고 먼저 말해 주기',
   '말하기 연습 상대가 되어 주기'
 ];
+const ROLES = [                                    // 이름표 역할 칸(Buddy는 버디로 고정)
+  { key: 'rep', label: 'Representer', ko: '대표' },
+  { key: 'rec', label: 'Recorder', ko: '기록' },
+  { key: 'mgr', label: 'Team manager', ko: '관리' }
+];
+// 제출 결과 코드 → 안내 문구 (교사·학생 공통)
+const ERR = {
+  closed: '지금은 접수 시간이 아닙니다. 선생님 안내를 기다려 주세요.',
+  bad: '학년, 반, 번호, 이름을 모두 정확히 입력하세요.',
+  buddy: '버디는 지원할 수 없습니다.',
+  dup: '이미 제출한 학생입니다. 바꾸고 싶으면 선생님께 말씀하세요.',
+  full: '이 약속은 마감되었습니다. 다른 약속을 골라 주세요.',
+  invalid: '잘못된 선택입니다.'
+};
 
 const params = new URLSearchParams(location.search);
 const IS_STUDENT = params.has('room') || params.has('join');
@@ -203,10 +245,13 @@ function shuffleArr(a) {
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 }
-function makeCode() {
+function makeCode(len = CODE_LEN) {
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';           // 헷갈리는 0/O, 1/I 제외
-  return Array.from({ length: 6 }, () => abc[Math.floor(Math.random() * abc.length)]).join('');
+  const r = crypto.getRandomValues(new Uint32Array(len));
+  return Array.from(r, n => abc[n % abc.length]).join('');
 }
+const prettyCode = (c) => c.length === 8 ? c.slice(0, 4) + ' ' + c.slice(4) : c;
+const cleanCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 // 다시 그릴 때 입력 중인 칸의 포커스·커서 위치 유지
 function keepFocus(fn) {
   const a = document.activeElement, id = a && a.id;
@@ -229,6 +274,67 @@ function sanitizeStudent(s) {
 }
 
 /* =========================================================
+   중계(Relay): ntfy 토픽으로 메시지를 주고받음
+   - 방 코드 → SHA-256 → 토픽 이름 / AES-GCM 키 (서버는 코드·내용을 알 수 없음)
+   - 학생 → 교사: <토픽>-in,  교사 → 학생: <토픽>-out
+   ========================================================= */
+const te = new TextEncoder(), td = new TextDecoder();
+const sha = async (s) => new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode(s)));
+const b64 = (u8) => btoa(String.fromCharCode(...u8));
+const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function roomChannel(code) {
+  const t = await sha('egm-topic:' + code), k = await sha('egm-key:' + code);
+  const hex = Array.from(t.slice(0, 12), b => b.toString(16).padStart(2, '0')).join('');
+  const key = await crypto.subtle.importKey('raw', k, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return { inTopic: `egm-${hex}-in`, outTopic: `egm-${hex}-out`, key };
+}
+async function seal(key, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(JSON.stringify(obj))));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+  return b64(out);
+}
+async function unseal(key, str) {
+  try {
+    const raw = unb64(str);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12) }, key, raw.slice(12));
+    return JSON.parse(td.decode(pt));
+  } catch (e) { return null; }                      // 다른 방·손상된 메시지는 무시
+}
+async function relayPublish(topic, key, obj) {
+  const res = await fetch(`${RELAY}/${topic}`, { method: 'POST', body: await seal(key, obj) });
+  if (!res.ok) { const err = new Error('relay ' + res.status); err.status = res.status; throw err; }
+}
+// SSE 구독. 끊기면 점점 간격을 늘려 다시 연결(요청 한도 보호)
+function relaySubscribe(topic, key, since, onMsg, onStatus) {
+  let es = null, closed = false, wait = 3000, timer = null, queue = Promise.resolve();
+  const open = () => {
+    es = new EventSource(`${RELAY}/${topic}/sse?since=${since}`);
+    es.onopen = () => { wait = 3000; onStatus('open'); };
+    es.onmessage = (e) => {
+      let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+      if (m.event && m.event !== 'message') return;
+      // 복호화는 비동기이므로 도착 순서를 지키도록 줄 세움
+      queue = queue.then(() => unseal(key, m.message)).then(obj => { if (obj && !closed) onMsg(obj); });
+    };
+    es.onerror = () => {
+      if (closed) return;
+      onStatus('error');
+      if (es.readyState === EventSource.CLOSED) {
+        timer = setTimeout(() => { if (!closed) open(); }, wait);
+        wait = Math.min(wait * 2, 60000);
+      }
+    };
+  };
+  open();
+  return { close() { closed = true; clearTimeout(timer); if (es) es.close(); } };
+}
+const relayErrorText = (e) => e && e.status === 429
+  ? '중계 서버 사용 한도에 도달했습니다. 잠시 후 자동으로 다시 시도합니다.'
+  : '중계 서버에 접속하지 못했습니다. 인터넷 연결을 확인하세요.';
+
+/* =========================================================
    모둠원 데이터
    - 교사 입력: { name }
    - QR 제출:  { name, grade, cls, no, via: 'qr' }
@@ -247,7 +353,6 @@ function bootTeacher() {
 function freshState() {
   return {
     step: 1,
-    unit: '',
     shuffle: true,
     maxPer: 4,
     mode: 'qr',                                   // 'qr' 학생 태블릿 | 'teacher' 교사 입력
@@ -258,11 +363,15 @@ function freshState() {
     roster: [],
     rosterDraft: '',
     members: Array.from({ length: GROUPS }, () => []),
+    roles: Array.from({ length: GROUPS }, () => ({ rep: '', rec: '', mgr: '' })),
     history: [],                                  // 되돌리기용 {g, key}
     feed: [],                                     // 최근 QR 제출 기록
+    results: [],                                  // 학생에게 돌려줄 최근 제출 결과
+    seen: [],                                     // 이미 처리한 제출 ID(중복 처리 방지)
     current: '',
     teacherView: false,
-    revealed: false
+    revealed: false,
+    view3: 'tags'                                 // 3단계 보기: 'tags' 이름표 | 'contract' 서약서
   };
 }
 function load() {
@@ -273,6 +382,7 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* 저장 불가 환경 무시 */ }
 }
 let S = Object.assign(freshState(), load() || {});
+if (S.room && S.room.length !== CODE_LEN) S.room = '';   // 이전 버전(P2P) 코드는 새로 발급
 const UI = { qrBig: false };
 
 const allMembers = () => S.members.flat();
@@ -281,16 +391,15 @@ const buddyNames = () => S.buddies.map(b => b.name.trim());
 const unassigned = () => S.roster.filter(n => !memberNames().includes(n));
 const isAccepting = () => S.mode === 'qr' && S.step === 2 && S.qrOpen;
 
-// 교사 입력·QR 제출 공통 배치 로직. 실패 시 오류 메시지 반환
+// 교사 입력·QR 제출 공통 배치 로직. 실패 시 ERR 코드 반환
 function addMember(g, m) {
-  if (!m.name) return '이름을 입력하세요.';
-  if (!S.buddies[g]) return '잘못된 선택입니다.';
-  if (buddyNames().includes(m.name)) return '버디는 지원할 수 없습니다.';
+  if (!m.name) return 'bad';
+  if (!S.buddies[g]) return 'invalid';
+  if (buddyNames().includes(m.name)) return 'buddy';
   const key = memberKey(m);
-  if (allMembers().some(x => memberKey(x) === key))
-    return m.grade ? '이미 제출한 학생입니다. 바꾸고 싶으면 선생님께 말씀하세요.' : `${m.name} 학생은 이미 배치되었습니다.`;
-  if (!m.grade && memberNames().includes(m.name)) return `${m.name} 학생은 이미 배치되었습니다.`;
-  if (S.members[g].length >= S.maxPer) return '이 약속은 마감되었습니다. 다른 약속을 골라 주세요.';
+  if (allMembers().some(x => memberKey(x) === key)) return 'dup';
+  if (!m.grade && memberNames().includes(m.name)) return 'dup';
+  if (S.members[g].length >= S.maxPer) return 'full';
   S.members[g].push(m);
   S.history.push({ g, key });
   return null;
@@ -300,87 +409,118 @@ function removeByKey(g, key) {
   return k < 0 ? null : S.members[g].splice(k, 1)[0];
 }
 
-/* ---------- 네트워크(PeerJS): 교사 PC가 호스트 ---------- */
-const NET = { peer: null, conns: new Set(), status: 'off', msg: '' };
+/* ---------- 중계: 교사 PC가 제출을 받아 처리 ---------- */
+const NET = { ch: null, sub: null, starting: false, status: 'off', msg: '', room: '',
+  pubTimer: null, publishing: false, lastSent: '', retry: null };
 
-function ensureHost() {
-  if (NET.peer || S.mode !== 'qr' || S.step < 2) return;
-  if (!window.Peer) { NET.status = 'error'; NET.msg = '연결 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하세요.'; return; }
+async function ensureHost() {
+  if (S.mode !== 'qr' || S.step < 2) return;
   if (!S.room) { S.room = makeCode(); save(); }
-  NET.status = 'connecting'; NET.msg = '';
-  const peer = new Peer(PEER_PREFIX + S.room, PEER_OPTS);
-  NET.peer = peer;
-  peer.on('open', () => { NET.status = 'ready'; refreshNet(); });
-  peer.on('connection', (conn) => {
-    conn.on('open', () => { NET.conns.add(conn); sendState(conn); refreshNet(); });
-    conn.on('data', (d) => onStudentMsg(conn, d));
-    const drop = () => { NET.conns.delete(conn); refreshNet(); };
-    conn.on('close', drop); conn.on('error', drop);
-  });
-  peer.on('disconnected', () => {
-    if (peer.destroyed) return;
-    NET.status = 'connecting'; refreshNet();
-    setTimeout(() => { try { if (!peer.destroyed) peer.reconnect(); } catch (e) { /* 다음 시도 */ } }, 1500);
-  });
-  peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {          // 방 코드가 이미 사용 중 → 새 코드
-      destroyHost(); S.room = makeCode(); save(); ensureHost(); render(); return;
-    }
-    if (err.type === 'peer-unavailable') return;  // 개별 학생 연결 문제는 무시
-    NET.status = 'error';
-    NET.msg = '연결 서버에 접속하지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.';
+  if (NET.starting || (NET.sub && NET.room === S.room)) return;
+  destroyHost();
+  NET.starting = true; NET.status = 'connecting'; NET.room = S.room;
+  try {
+    if (!window.crypto || !crypto.subtle) throw new Error('보안 연결(HTTPS)에서만 사용할 수 있습니다.');
+    NET.ch = await roomChannel(S.room);
+  } catch (e) {
+    NET.starting = false; NET.status = 'error'; NET.msg = e.message; refreshNet(); return;
+  }
+  NET.starting = false;
+  if (NET.room !== S.room) return ensureHost();
+  // since=all: 교사 화면이 잠시 꺼져 있던 동안의 제출도 받아 처리(중복은 seen으로 걸러냄)
+  NET.sub = relaySubscribe(NET.ch.inTopic, NET.ch.key, 'all', onStudentMsg, (st) => {
+    if (st === 'open') { NET.status = 'ready'; NET.msg = ''; schedulePublish(true); }
+    else { NET.status = 'error'; NET.msg = '중계 서버 연결이 끊겼습니다. 자동으로 다시 연결합니다.'; }
     refreshNet();
   });
+  refreshNet();
 }
 function destroyHost() {
-  if (NET.peer) try { NET.peer.destroy(); } catch (e) { /* 무시 */ }
-  NET.peer = null; NET.conns.clear(); NET.status = 'off';
+  if (NET.sub) NET.sub.close();
+  clearTimeout(NET.pubTimer); clearTimeout(NET.retry);
+  Object.assign(NET, { ch: null, sub: null, status: 'off', msg: '', room: '', lastSent: '' });
 }
 function statePayload() {
+  // 학생 태블릿에는 버디 이름 없이 약속·인원·제출 결과만 전달
   return {
-    t: 'state', open: isAccepting(), unit: S.unit, maxPer: S.maxPer,
-    // 학생 태블릿에는 버디 이름 없이 약속과 인원만 전달
-    cards: S.buddies.map((b, g) => ({ g, pledge: b.pledge, count: S.members[g].length }))
+    t: 'state', open: isAccepting(), maxPer: S.maxPer,
+    cards: S.buddies.map((b, g) => ({ g, p: b.pledge, c: S.members[g].length })),
+    r: S.results
   };
 }
-function sendState(conn) { try { if (conn.open) conn.send(statePayload()); } catch (e) { /* 무시 */ } }
-function broadcast() { if (NET.conns.size) { const p = statePayload(); NET.conns.forEach(c => { try { if (c.open) c.send(p); } catch (e) { } }); } }
+// 상태가 바뀌었을 때만, 짧게 모아서 전송(중계 서버 일일 한도 절약)
+function schedulePublish(force) {
+  if (!NET.ch || NET.status === 'off') return;
+  if (force) NET.lastSent = '';
+  clearTimeout(NET.pubTimer);
+  NET.pubTimer = setTimeout(publishState, 1200);
+}
+async function publishState() {
+  if (!NET.ch || NET.publishing) return;
+  const p = statePayload();
+  // ntfy 메시지 한도(4,096바이트)를 넘지 않도록 오래된 결과부터 덜어냄(암호화·base64 증가분 고려)
+  while (p.r.length && te.encode(JSON.stringify(p)).length > 2800) p.r = p.r.slice(1);
+  const json = JSON.stringify(p);
+  if (json === NET.lastSent) return;
+  NET.publishing = true;
+  try {
+    await relayPublish(NET.ch.outTopic, NET.ch.key, p);
+    NET.lastSent = json;
+    if (NET.status === 'error') { NET.status = 'ready'; NET.msg = ''; refreshNet(); }
+  } catch (e) {
+    NET.status = 'error'; NET.msg = relayErrorText(e); refreshNet();
+    clearTimeout(NET.retry);
+    NET.retry = setTimeout(publishState, e.status === 429 ? 30000 : 8000);
+  } finally {
+    NET.publishing = false;
+  }
+  if (JSON.stringify(statePayload()) !== NET.lastSent && NET.status !== 'error') schedulePublish();
+}
 
-function onStudentMsg(conn, d) {
-  if (!d || typeof d !== 'object') return;
-  if (d.t === 'hello') return sendState(conn);
-  if (d.t !== 'join') return;
-  const reply = (ok, msg, extra = {}) => { try { conn.send({ t: 'result', id: d.id, ok, msg, ...extra }); } catch (e) { } };
-  if (!isAccepting()) { sendState(conn); return reply(false, '지금은 접수 시간이 아닙니다. 선생님 안내를 기다려 주세요.'); }
-  const s = sanitizeStudent(d.student);
-  if (!s) return reply(false, '학년, 반, 번호, 이름을 모두 정확히 입력하세요.');
-  const g = Number(d.g);
-  if (!Number.isInteger(g) || g < 0 || g >= GROUPS) return reply(false, '잘못된 선택입니다.');
-  const err = addMember(g, { ...s, via: 'qr' });
-  if (err) { sendState(conn); return reply(false, err); }
-  S.feed.unshift({ label: memberLabel(s), g });
-  S.feed = S.feed.slice(0, 8);
-  reply(true, '', { g, pledge: S.buddies[g].pledge });
+function onStudentMsg(d) {
+  if (!d || d.t !== 'join' || typeof d.i !== 'string') return;
+  if (S.seen.includes(d.i)) return;
+  S.seen.push(d.i); S.seen = S.seen.slice(-500);
+  const done = (code, g) => {
+    S.results.push({ i: d.i, ok: code ? 0 : 1, c: code || '', g });
+    S.results = S.results.slice(-20);
+  };
+  const s = sanitizeStudent(d.s), g = Number(d.g);
+  if (!isAccepting()) done('closed');
+  else if (!s) done('bad');
+  else if (!Number.isInteger(g) || g < 0 || g >= GROUPS) done('invalid');
+  else {
+    // 응답을 못 받고 다시 제출한 같은 학생·같은 약속은 성공으로 처리
+    const same = S.members[g].some(m => memberKey(m) === memberKey(s));
+    const code = same ? null : addMember(g, { ...s, via: 'qr' });
+    done(code, g);
+    if (!code && !same) {
+      S.feed.unshift({ label: memberLabel(s), g });
+      S.feed = S.feed.slice(0, 8);
+      toast('학생 1명이 약속을 골랐습니다.');   // 화면 공유 중일 수 있어 이름은 띄우지 않음
+    }
+  }
   render();
-  toast('학생 1명이 약속을 골랐습니다.');      // 화면 공유 중일 수 있어 이름은 띄우지 않음
+  schedulePublish();
 }
 
 function joinUrl() {
   let base = S.publicUrl.trim();
   if (base) base = base.split('#')[0].split('?')[0];
   else if (location.protocol.startsWith('http')) base = location.origin + location.pathname;
-  return base ? `${base}?room=${S.room}` : '';
+  return base && S.room ? `${base}?room=${S.room}` : '';
 }
 function netStatusHTML() {
+  const qrCount = allMembers().filter(m => m.via === 'qr').length;
   const map = {
     off: ['bg-slate-400', '연결 꺼짐'],
-    connecting: ['bg-amber-400 pulse', '연결 준비 중…'],
-    ready: ['bg-emerald-500', `학생 접속 대기 중 · 연결된 태블릿 ${NET.conns.size}대`],
+    connecting: ['bg-amber-400 pulse', '중계 서버에 연결 중…'],
+    ready: ['bg-emerald-500', `접수 준비 완료 · 태블릿 제출 ${qrCount}명`],
     error: ['bg-rose-500', NET.msg || '연결 오류']
   };
   const [cls, label] = map[NET.status] || map.off;
-  return `<span class="dot ${cls}"></span><span>${esc(label)}</span>
-    ${NET.status === 'error' ? `<button data-act="retryNet" class="btn btn-glass text-xs px-3 py-1 ml-auto">다시 연결</button>` : ''}`;
+  return `<span class="dot ${cls} mt-1"></span><span class="flex-1">${esc(label)}</span>
+    ${NET.status === 'error' ? `<button data-act="retryNet" class="btn btn-glass text-xs px-3 py-1">다시 연결</button>` : ''}`;
 }
 function refreshNet() {
   const el = $('#netStatus');
@@ -392,7 +532,7 @@ function drawQR() {
     const el = $(sel);
     if (!el) return;
     el.innerHTML = '';
-    if (!url || !S.room) return;
+    if (!url) return;
     if (!window.QRCode) { el.innerHTML = '<p class="text-xs text-rose-700 p-4">QR 라이브러리를 불러오지 못했습니다.</p>'; return; }
     new QRCode(el, { text: url, width: size, height: size, colorDark: '#0f172a', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
   });
@@ -400,7 +540,7 @@ function drawQR() {
 
 /* ---------- 단계 표시 ---------- */
 function renderStepper() {
-  const steps = ['버디 등록 · 도움 서약', '블라인드 가치 선택', '모둠 공개 · 협동 서약서'];
+  const steps = ['버디 등록 · 도움 서약', '블라인드 가치 선택', '모둠 공개 · 이름표'];
   $('#stepper').innerHTML = `
     <ol class="grid grid-cols-3 gap-2">
       ${steps.map((label, i) => {
@@ -428,16 +568,10 @@ function renderStep1() {
       <p class="text-xs text-amber-800 bg-amber-100/60 border border-amber-200/80 rounded-2xl px-4 py-2 mt-3">
         익명성을 지키려면 이 단계는 학생들이 화면을 보기 전에(또는 화면 공유를 끈 상태에서) 진행하세요.
       </p>
-      <div class="mt-4 flex flex-wrap items-center gap-4">
-        <label class="text-sm text-slate-700">단원명(선택)
-          <input id="unitInput" data-bind="unit" value="${esc(S.unit)}" placeholder="예: Lesson 7. What time is it?"
-            class="input-glass ml-2 w-64 max-w-full px-3 py-1.5 text-sm">
-        </label>
-        <label class="text-sm text-slate-700 flex items-center gap-2">
-          <input type="checkbox" data-bind="shuffle" ${S.shuffle ? 'checked' : ''} class="accent-teal-600 w-4 h-4">
-          모둠 번호 무작위 배정 (등록 순서로 버디를 추측하지 못하게)
-        </label>
-      </div>
+      <label class="mt-4 text-sm text-slate-700 flex items-center gap-2">
+        <input type="checkbox" data-bind="shuffle" ${S.shuffle ? 'checked' : ''} class="accent-teal-600 w-4 h-4">
+        모둠 번호 무작위 배정 (등록 순서로 버디를 추측하지 못하게)
+      </label>
     </div>
 
     <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -498,7 +632,7 @@ function renderStep2() {
           <div id="qrBox" class="mx-auto" style="max-width:220px"></div>
         </button>
         <p class="text-center mt-3 text-xs text-slate-500">방 코드</p>
-        <p class="text-center font-mono text-2xl font-bold tracking-[0.3em] text-teal-900">${esc(S.room)}</p>
+        <p class="text-center font-mono text-2xl font-bold tracking-[0.2em] text-teal-900">${esc(prettyCode(S.room))}</p>
         <p class="text-[11px] text-slate-500 break-all text-center mt-1">${esc(joinUrl())}</p>
       ` : `
         <p class="text-xs text-amber-800 bg-amber-100/60 border border-amber-200/80 rounded-2xl px-3 py-2">
@@ -507,7 +641,7 @@ function renderStep2() {
       <label class="block text-[11px] text-slate-500 mt-3 mb-1">학생용 공개 주소 (자동 감지 시 비워 두기)</label>
       <input id="publicUrl" data-bind="publicUrl" value="${esc(S.publicUrl)}" placeholder="https://아이디.github.io/저장소/"
         class="input-glass w-full px-3 py-1.5 text-xs">
-      <div id="netStatus" class="flex items-center gap-2 text-xs text-slate-600 mt-3">${netStatusHTML()}</div>
+      <div id="netStatus" class="flex items-start gap-2 text-xs text-slate-600 mt-3">${netStatusHTML()}</div>
       <div class="grid grid-cols-2 gap-2 mt-3">
         <button data-act="toggleOpen" class="btn ${S.qrOpen ? 'btn-glass' : 'btn-primary'} text-xs px-3 py-2">${S.qrOpen ? '접수 마감하기' : '접수 다시 열기'}</button>
         <button data-act="newRoom" class="btn btn-glass text-xs px-3 py-2">방 코드 새로 만들기</button>
@@ -570,7 +704,7 @@ function renderStep2() {
         <div class="glass p-5 mb-4">
           ${qr ? `
             <p class="text-sm text-slate-600">학생은 태블릿에서 <b class="text-slate-900">학년 · 반 · 번호 · 이름</b>을 입력하고, 함께 실천하고 싶은 <b class="text-slate-900">협동 약속</b>을 하나 고릅니다.</p>
-            <p class="text-xs text-slate-500 mt-1">버디 이름은 태블릿에도, 이 화면에도 표시되지 않습니다. 제출 현황은 실시간으로 반영됩니다.</p>`
+            <p class="text-xs text-slate-500 mt-1">버디 이름은 태블릿에도, 이 화면에도 표시되지 않습니다. 제출 현황은 몇 초 안에 반영됩니다.</p>`
           : `
             <p class="text-sm text-slate-500">카드를 읽고, <b class="text-slate-800">내가 함께 실천하고 싶은 협동 약속</b>을 하나 고르세요.</p>
             <div class="mt-3 flex flex-wrap items-center gap-3">
@@ -620,14 +754,57 @@ function renderStep2() {
           <p class="font-serif text-xl sm:text-2xl font-bold">태블릿 카메라로 QR을 찍어 접속하세요</p>
           <div class="rounded-3xl bg-white p-4 mt-4 mx-auto" style="max-width:520px"><div id="qrBig"></div></div>
           <p class="mt-4 text-sm text-slate-500">방 코드</p>
-          <p class="font-mono text-4xl font-bold tracking-[0.35em] text-teal-900">${esc(S.room)}</p>
+          <p class="font-mono text-4xl font-bold tracking-[0.25em] text-teal-900">${esc(prettyCode(S.room))}</p>
           <p class="mt-3 text-xs text-slate-400">화면을 누르면 닫힙니다.</p>
         </div>
       </div>` : ''}
   </section>`;
 }
 
-/* ---------- 3단계: 모둠 공개 및 협동 서약서 ---------- */
+/* ---------- 3단계: 모둠 공개 · 이름표 · 협동 서약서 ---------- */
+function roleName(g, role) {
+  const key = S.roles[g] && S.roles[g][role];
+  const m = key && S.members[g].find(x => memberKey(x) === key);
+  return m ? m.name : '';
+}
+function tagSheetHTML(g) {
+  const b = S.buddies[g];
+  const cell = (label, name) => `<div class="tag-role"><span>${label} :</span><b>${esc(name)}</b></div>`;
+  return `
+    <div class="tag-sheet">
+      <div class="tag-band tag-roles">
+        <div class="tag-flip">
+          ${cell('Buddy', b.name)}${cell('Representer', roleName(g, 'rep'))}
+          ${cell('Recorder', roleName(g, 'rec'))}${cell('Team manager', roleName(g, 'mgr'))}
+        </div>
+      </div>
+      <div class="tag-band tag-team"><span class="tag-label">Team name</span></div>
+      <span class="tag-no">모둠 ${g + 1}</span>
+    </div>`;
+}
+function tagCardHTML(g) {
+  const mem = S.members[g];
+  const others = mem.filter(m => !ROLES.some(r => S.roles[g][r.key] === memberKey(m)));
+  return `
+  <div class="tag-card glass glass-strong p-4">
+    <div class="tag-ui flex items-center justify-between mb-3">
+      <span class="text-sm font-semibold text-teal-800">모둠 ${g + 1}</span>
+      <span class="text-xs text-slate-500">버디 <b class="text-slate-800">${esc(S.buddies[g].name)}</b> · 모둠원 ${mem.length}명</span>
+    </div>
+    ${tagSheetHTML(g)}
+    <div class="tag-ui mt-3 space-y-2">
+      ${ROLES.map(r => `
+        <label class="flex items-center justify-between gap-2 text-xs text-slate-600">
+          <span class="w-28">${r.label} <span class="text-slate-400">${r.ko}</span></span>
+          <select data-role="${r.key}" data-g="${g}" class="input-glass flex-1 px-2 py-1.5 text-sm">
+            <option value="">(비워 두기 · 손으로 쓰기)</option>
+            ${mem.map(m => `<option value="${esc(memberKey(m))}" ${S.roles[g][r.key] === memberKey(m) ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+          </select>
+        </label>`).join('')}
+      ${others.length ? `<p class="text-[11px] text-slate-500 pt-1">역할 없는 모둠원: ${others.map(m => esc(m.name)).join(', ')}</p>` : ''}
+    </div>
+  </div>`;
+}
 function contractHTML(g, idx) {
   const b = S.buddies[g], mem = S.members[g], show = S.revealed;
   return `
@@ -635,7 +812,6 @@ function contractHTML(g, idx) {
     <header class="text-center border-b border-white/70 pb-3 mb-4">
       <p class="text-[10px] tracking-[0.25em] uppercase text-teal-700 font-semibold">Team Learning Contract</p>
       <h3 class="font-serif text-xl font-bold mt-1">영어 협동 서약서 · 모둠 ${g + 1}</h3>
-      ${S.unit ? `<p class="text-xs text-slate-500 mt-1">${esc(S.unit)}</p>` : ''}
     </header>
 
     <section class="mb-4">
@@ -669,39 +845,57 @@ function contractHTML(g, idx) {
   </article>`;
 }
 function renderStep3() {
-  const top = S.revealed
-    ? `<div class="no-print glass p-5 flex flex-wrap items-center justify-between gap-3 mb-5">
-         <div>
-           <h2 class="font-serif text-lg font-bold">우리 모둠의 협동 서약서</h2>
-           <p class="text-sm text-slate-500">버디와 모둠원이 함께 읽고 서명합니다.</p>
-         </div>
-         <div class="flex flex-wrap gap-2">
-           <button data-act="printAll" class="btn btn-primary text-sm px-4 py-2">인쇄: A4 한 장(전체)</button>
-           <button data-act="printEach" class="btn btn-dark text-sm px-4 py-2">인쇄: 모둠별 한 장</button>
-           <button data-act="copyAll" class="btn btn-glass text-sm px-4 py-2">전체 텍스트 복사</button>
-           <button data-act="backTo2" class="btn text-sm px-4 py-2 text-slate-500 hover:bg-white/40">← 배치 수정</button>
-         </div>
-       </div>`
-    : `<div class="no-print glass glass-strong p-10 text-center mb-6 fade-in">
-         <p class="text-sm text-slate-500">모든 친구가 함께할 약속을 골랐습니다.</p>
-         <p class="font-serif text-xl sm:text-2xl mt-2">이제 우리를 도와줄 버디가 누구인지 확인해 볼까요?</p>
-         <button data-act="reveal" class="btn btn-primary mt-6 px-7 py-3 font-semibold">우리 모둠의 버디 확인하기</button>
-         <div class="mt-3"><button data-act="backTo2" class="text-xs text-slate-400 hover:underline">← 배치 수정</button></div>
-       </div>`;
+  if (!S.revealed) {
+    return `<section>
+      <div class="no-print glass glass-strong p-10 text-center mb-6 fade-in">
+        <p class="text-sm text-slate-500">모든 친구가 함께할 약속을 골랐습니다.</p>
+        <p class="font-serif text-xl sm:text-2xl mt-2">이제 우리를 도와줄 버디가 누구인지 확인해 볼까요?</p>
+        <button data-act="reveal" class="btn btn-primary mt-6 px-7 py-3 font-semibold">우리 모둠의 버디 확인하기</button>
+        <div class="mt-3"><button data-act="backTo2" class="text-xs text-slate-400 hover:underline">← 배치 수정</button></div>
+      </div>
+      <div id="contracts" class="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+        ${S.buddies.map((_, g) => contractHTML(g, g)).join('')}
+      </div></section>`;
+  }
+  const tags = S.view3 !== 'contract';
+  const top = `
+    <div class="no-print glass p-5 mb-5">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="seg">
+          <button data-act="view3" data-v="tags" class="${tags ? 'on' : ''}">🏷️ 모둠 이름표</button>
+          <button data-act="view3" data-v="contract" class="${!tags ? 'on' : ''}">📜 협동 서약서</button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          ${tags ? `
+            <button data-act="rolesRandom" class="btn btn-glass text-sm px-4 py-2">🎲 역할 무작위 배정</button>
+            <button data-act="rolesClear" class="btn btn-glass text-sm px-4 py-2">역할 비우기</button>
+            <button data-act="printTags" class="btn btn-primary text-sm px-4 py-2">인쇄: 모둠별 A4 이름표</button>`
+          : `
+            <button data-act="printAll" class="btn btn-primary text-sm px-4 py-2">인쇄: A4 한 장(전체)</button>
+            <button data-act="printEach" class="btn btn-dark text-sm px-4 py-2">인쇄: 모둠별 한 장</button>
+            <button data-act="copyAll" class="btn btn-glass text-sm px-4 py-2">전체 텍스트 복사</button>`}
+          <button data-act="backTo2" class="btn text-sm px-4 py-2 text-slate-500 hover:bg-white/40">← 배치 수정</button>
+        </div>
+      </div>
+      ${tags ? `<p class="text-xs text-slate-500 mt-3">역할 칸은 접었을 때 반대쪽에서 읽히도록 거꾸로 인쇄됩니다. 역할을 비워 두면 학생이 직접 쓰고, <b>Team name</b>은 모둠이 함께 정해 손으로 씁니다.</p>` : ''}
+    </div>`;
   return `<section>${top}
-    <div id="contracts" class="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
-      ${S.buddies.map((_, g) => contractHTML(g, g)).join('')}
-    </div></section>`;
+    ${tags
+      ? `<div id="tags" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">${S.buddies.map((_, g) => tagCardHTML(g)).join('')}</div>`
+      : `<div id="contracts" class="grid md:grid-cols-2 xl:grid-cols-3 gap-5">${S.buddies.map((_, g) => contractHTML(g, g)).join('')}</div>`}
+  </section>`;
 }
 
 /* ---------- 텍스트 / 인쇄 / 복사 ---------- */
 function contractText(g) {
   const b = S.buddies[g];
+  const roles = ROLES.map(r => roleName(g, r.key) && `${r.label}: ${roleName(g, r.key)}`).filter(Boolean);
   return [
-    `[영어 협동 서약서 - 모둠 ${g + 1}]${S.unit ? ' ' + S.unit : ''}`,
+    `[영어 협동 서약서 - 모둠 ${g + 1}]`,
     `모둠 버디: ${b.name}`,
     `도움 서약: ${b.pledge}`,
     `모둠원: ${S.members[g].map(memberLabel).join(', ') || '(없음)'}`,
+    ...(roles.length ? [`역할: ${roles.join(', ')}`] : []),
     `공통 약속: ${PROMISE}`
   ].join('\n');
 }
@@ -716,7 +910,7 @@ async function copyText(text) {
 }
 function doPrint(mode) {
   document.body.classList.add('print-' + mode);
-  const clear = () => document.body.classList.remove('print-all', 'print-each');
+  const clear = () => document.body.classList.remove('print-all', 'print-each', 'print-tags');
   window.addEventListener('afterprint', clear, { once: true });
   setTimeout(() => { window.print(); setTimeout(clear, 500); }, 50);
 }
@@ -729,12 +923,20 @@ function render() {
     $('#app').innerHTML = S.step === 1 ? renderStep1() : S.step === 2 ? renderStep2() : renderStep3();
   });
   drawQR();
-  broadcast();
+  schedulePublish();
   save();
 }
 
 /* ---------- 이벤트: 입력 ---------- */
 document.addEventListener('input', (e) => {
+  const roleSel = e.target.closest('[data-role]');
+  if (roleSel) {
+    const g = +roleSel.dataset.g, role = roleSel.dataset.role, key = roleSel.value;
+    // 한 학생은 한 역할만: 다른 칸에 같은 학생이 있으면 비움
+    if (key) ROLES.forEach(r => { if (r.key !== role && S.roles[g][r.key] === key) S.roles[g][r.key] = ''; });
+    S.roles[g][role] = key;
+    render(); return;
+  }
   const el = e.target.closest('[data-bind]');
   if (!el) return;
   const key = el.dataset.bind;
@@ -742,8 +944,7 @@ document.addEventListener('input', (e) => {
     const i = +el.dataset.i;
     S.buddies[i][key] = el.value;
     const badge = $('#badge-' + i); if (badge) badge.innerHTML = badgeHTML(i);
-  } else if (key === 'unit') S.unit = el.value;
-  else if (key === 'current') S.current = el.value.trim();
+  } else if (key === 'current') S.current = el.value.trim();
   else if (key === 'rosterDraft') S.rosterDraft = el.value;
   else if (key === 'shuffle') S.shuffle = el.checked;
   else if (key === 'publicUrl') { S.publicUrl = el.value; save(); return; }
@@ -800,7 +1001,7 @@ document.addEventListener('click', (e) => {
 
     case 'newRoom':
       if (!confirm('방 코드를 새로 만들면 접속 중인 태블릿은 새 QR로 다시 접속해야 합니다. 계속할까요?')) return;
-      destroyHost(); S.room = makeCode(); render(); break;
+      destroyHost(); S.room = makeCode(); S.results = []; render(); break;
 
     case 'retryNet':
       destroyHost(); render(); break;
@@ -818,8 +1019,8 @@ document.addEventListener('click', (e) => {
     case 'join': {
       const name = (S.current || '').trim();
       if (!name) return toast('먼저 선택할 친구의 이름을 입력하세요.');
-      const err = addMember(g, { name });
-      if (err) return toast(err);
+      const code = addMember(g, { name });
+      if (code) return toast(code === 'dup' ? `${name} 학생은 이미 배치되었습니다.` : ERR[code]);
       S.current = '';
       render();
       toast(`${name} → 모둠 ${g + 1}의 약속에 함께합니다.`);
@@ -861,6 +1062,21 @@ document.addEventListener('click', (e) => {
     case 'backTo2':
       S.step = 2; render(); break;
 
+    case 'view3':
+      S.view3 = btn.dataset.v; render(); break;
+
+    case 'rolesRandom':
+      S.roles = S.members.map(mem => {
+        const keys = shuffleArr(mem.map(memberKey));
+        return { rep: keys[0] || '', rec: keys[1] || '', mgr: keys[2] || '' };
+      });
+      render(); toast('역할을 무작위로 배정했습니다.'); break;
+
+    case 'rolesClear':
+      S.roles = Array.from({ length: GROUPS }, () => ({ rep: '', rec: '', mgr: '' }));
+      render(); break;
+
+    case 'printTags': doPrint('tags'); break;
     case 'printAll': doPrint('all'); break;
     case 'printEach': doPrint('each'); break;
     case 'copyOne': copyText(contractText(g)); break;
@@ -883,94 +1099,92 @@ function bootStudent() {
 
   const saved = (() => { try { return JSON.parse(sessionStorage.getItem(STUDENT_KEY)) || {}; } catch (e) { return {}; } })();
   const ST = {
-    room: (params.get('room') || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, ''),
-    peer: null, conn: null, status: 'connecting', data: null, retryTimer: null,
+    room: cleanCode(params.get('room')),
+    ch: null, sub: null, status: 'connecting', data: null, noHostTimer: null,
     grade: saved.grade || '', cls: saved.cls || '', no: '', name: '',
-    sel: null, pending: false, pendingTimer: null, done: null, err: ''
+    sel: null, pending: null, pendingTimer: null, done: null, err: ''
   };
 
   const studentInfo = () => sanitizeStudent({ grade: ST.grade, cls: ST.cls, no: ST.no, name: ST.name });
 
-  /* ---------- 연결 ---------- */
-  function connect() {
-    clearTimeout(ST.retryTimer); ST.retryTimer = null;
-    if (ST.peer) try { ST.peer.destroy(); } catch (e) { }
-    ST.conn = null; ST.status = 'connecting'; render();
-    if (!window.Peer) { ST.status = 'error'; render(); return; }
-    const peer = new Peer(PEER_OPTS);
-    ST.peer = peer;
-    peer.on('open', () => {
-      const conn = peer.connect(PEER_PREFIX + ST.room, { reliable: true });
-      ST.conn = conn;
-      conn.on('open', () => { ST.status = 'online'; conn.send({ t: 'hello' }); render(); });
-      conn.on('data', onHostMsg);
-      conn.on('close', () => { if (ST.peer === peer) { ST.status = 'lost'; render(); retryLater(); } });
-      conn.on('error', () => { if (ST.peer === peer) { ST.status = 'lost'; render(); retryLater(); } });
+  /* ---------- 연결: since=latest로 최신 약속 카드를 받고, 이후 변경·결과를 실시간 수신 ---------- */
+  async function connect() {
+    if (ST.sub) ST.sub.close();
+    ST.status = 'connecting'; render();
+    try {
+      if (!window.crypto || !crypto.subtle) throw new Error();
+      ST.ch = ST.ch || await roomChannel(ST.room);
+    } catch (e) { ST.status = 'error'; render(); return; }
+    ST.sub = relaySubscribe(ST.ch.outTopic, ST.ch.key, 'latest', onHostMsg, (st) => {
+      ST.status = st === 'open' ? 'online' : 'lost';
+      clearTimeout(ST.noHostTimer);
+      // 연결됐는데 카드가 오지 않으면 방 코드가 틀렸거나 선생님 화면이 닫혀 있음
+      if (st === 'open' && !ST.data) ST.noHostTimer = setTimeout(() => { if (!ST.data) { ST.status = 'nohost'; render(); } }, 6000);
+      render();
     });
-    peer.on('error', (err) => {
-      if (ST.peer !== peer) return;
-      ST.status = err.type === 'peer-unavailable' ? 'nohost' : 'error';
-      render(); retryLater();
-    });
-    peer.on('disconnected', () => { try { if (!peer.destroyed) peer.reconnect(); } catch (e) { } });
   }
-  function retryLater() {
-    if (ST.retryTimer) return;
-    ST.retryTimer = setTimeout(connect, 4000);
-  }
+  function disconnect() { if (ST.sub) ST.sub.close(); ST.sub = null; clearTimeout(ST.noHostTimer); }
+
   function onHostMsg(d) {
-    if (!d || typeof d !== 'object') return;
-    if (d.t === 'state') {
-      ST.data = d;
-      const c = ST.sel != null && d.cards[ST.sel];
-      if (c && c.count >= d.maxPer) { ST.sel = null; ST.err = '고른 약속이 방금 마감되었습니다. 다른 약속을 골라 주세요.'; }
-      render();
-    } else if (d.t === 'result') {
+    if (!d || d.t !== 'state' || !Array.isArray(d.cards)) return;
+    ST.data = d;
+    if (ST.status === 'nohost') ST.status = 'online';
+    const res = ST.pending && (d.r || []).find(x => x.i === ST.pending.id);
+    if (res) {
       clearTimeout(ST.pendingTimer);
-      ST.pending = false;
-      if (d.ok) {
-        ST.done = { name: ST.name.trim(), pledge: d.pledge };
+      const p = ST.pending; ST.pending = null;
+      if (res.ok) {
+        ST.done = { name: p.name, pledge: (d.cards[res.g] || {}).p || '' };
         ST.no = ''; ST.name = ''; ST.sel = null; ST.err = '';
-      } else ST.err = d.msg || '제출하지 못했습니다.';
-      render();
+        disconnect();                                  // 연결 수 절약: 완료 화면에서는 연결을 닫음
+      } else ST.err = ERR[res.c] || '제출하지 못했습니다.';
+    } else {
+      const c = ST.sel != null && d.cards[ST.sel];
+      if (c && c.c >= d.maxPer) { ST.sel = null; ST.err = '고른 약속이 방금 마감되었습니다. 다른 약속을 골라 주세요.'; }
     }
+    render();
   }
-  function submit() {
+  async function submit() {
     const s = studentInfo();
-    if (!s) { ST.err = '학년, 반, 번호, 이름을 모두 정확히 입력하세요.'; return render(); }
+    if (!s) { ST.err = ERR.bad; return render(); }
     if (ST.sel == null) { ST.err = '함께할 약속을 하나 골라 주세요.'; return render(); }
     const card = ST.data.cards[ST.sel];
-    if (!confirm(`${s.grade}학년 ${s.cls}반 ${s.no}번 ${s.name}\n\n“${card.pledge}”\n\n이 약속으로 제출할까요? 제출한 뒤에는 바꿀 수 없어요.`)) return;
+    if (!confirm(`${s.grade}학년 ${s.cls}반 ${s.no}번 ${s.name}\n\n“${card.p}”\n\n이 약속으로 제출할까요? 제출한 뒤에는 바꿀 수 없어요.`)) return;
     try { sessionStorage.setItem(STUDENT_KEY, JSON.stringify({ grade: s.grade, cls: s.cls })); } catch (e) { }
-    ST.pending = true; ST.err = '';
-    ST.conn.send({ t: 'join', id: Date.now(), g: ST.sel, student: s });
-    ST.pendingTimer = setTimeout(() => { ST.pending = false; ST.err = '응답이 없습니다. 잠시 후 다시 제출해 주세요.'; render(); }, 8000);
+    ST.pending = { id: makeCode(10), name: s.name }; ST.err = '';
     render();
+    try {
+      await relayPublish(ST.ch.inTopic, ST.ch.key, { t: 'join', i: ST.pending.id, g: ST.sel, s });
+    } catch (e) {
+      ST.pending = null; ST.err = relayErrorText(e); return render();
+    }
+    // 응답이 늦으면 안내만 바꾸고 계속 기다림(늦게 와도 결과 반영)
+    ST.pendingTimer = setTimeout(() => { if (ST.pending) { ST.err = '선생님 화면의 응답을 기다리는 중입니다…'; render(); } }, 15000);
   }
 
   /* ---------- 화면 ---------- */
   function statusBar() {
     const map = {
       connecting: ['bg-amber-400 pulse', '선생님 화면에 연결 중…'],
-      online: ['bg-emerald-500', ST.data && ST.data.open ? '연결됨 · 접수 중' : '연결됨 · 접수 대기'],
+      online: ['bg-emerald-500', ST.data ? (ST.data.open ? '연결됨 · 접수 중' : '연결됨 · 접수 대기') : '연결됨 · 약속 카드 불러오는 중…'],
       lost: ['bg-rose-500 pulse', '연결이 끊겼습니다. 다시 연결 중…'],
-      nohost: ['bg-rose-500', '선생님 화면을 찾을 수 없습니다. 방 코드를 확인하세요.'],
-      error: ['bg-rose-500', '인터넷 연결을 확인해 주세요.']
+      nohost: ['bg-rose-500', '선생님 화면을 찾을 수 없습니다. 방 코드를 확인하거나 선생님께 알려 주세요.'],
+      error: ['bg-rose-500', '이 기기에서는 연결할 수 없습니다. 브라우저를 최신으로 업데이트해 주세요.']
     };
     const [cls, label] = map[ST.status] || map.connecting;
     return `<div class="glass px-4 py-2.5 mb-4 flex items-center gap-2 text-sm text-slate-700">
       <span class="dot ${cls}"></span><span>${label}</span>
-      <span class="ml-auto font-mono text-xs text-slate-500">방 ${esc(ST.room)}</span>
-      ${['nohost', 'error', 'lost'].includes(ST.status) ? `<button data-sact="retry" class="btn btn-glass text-xs px-3 py-1">다시 연결</button>` : ''}
+      <span class="ml-auto font-mono text-xs text-slate-500 whitespace-nowrap">방 ${esc(prettyCode(ST.room))}</span>
+      ${['nohost', 'lost'].includes(ST.status) ? `<button data-sact="retry" class="btn btn-glass text-xs px-3 py-1 whitespace-nowrap">다시 연결</button>` : ''}
     </div>`;
   }
   function codeEntry() {
     return `<section class="fade-in max-w-md mx-auto">
       <div class="glass glass-strong p-8 text-center">
         <p class="font-serif text-xl font-bold">방 코드를 입력하세요</p>
-        <p class="text-sm text-slate-500 mt-1">선생님 화면에 보이는 6자리 코드</p>
-        <input id="codeInput" maxlength="6" autocomplete="off" autocapitalize="characters"
-          class="input-glass mt-5 w-full text-center font-mono text-3xl tracking-[0.35em] uppercase py-3" placeholder="ABC123">
+        <p class="text-sm text-slate-500 mt-1">선생님 화면에 보이는 8자리 코드</p>
+        <input id="codeInput" maxlength="9" autocomplete="off" autocapitalize="characters"
+          class="input-glass mt-5 w-full text-center font-mono text-3xl tracking-[0.2em] uppercase py-3" placeholder="ABCD 1234">
         <button data-sact="enter" class="btn btn-primary w-full mt-4 py-3 text-base">입장하기</button>
       </div></section>`;
   }
@@ -987,13 +1201,13 @@ function bootStudent() {
   }
   function mainView() {
     const d = ST.data;
-    if (!d) return `<div class="glass p-10 text-center text-slate-500">${ST.status === 'connecting' ? '약속 카드를 불러오는 중…' : '선생님 화면과 연결되면 약속 카드가 나타납니다.'}</div>`;
+    if (!d) return `<div class="glass p-10 text-center text-slate-500">${ST.status === 'nohost' ? 'QR을 다시 찍거나, 선생님 화면이 2단계(블라인드 가치 선택)에 있는지 확인해 주세요.' : '약속 카드를 불러오는 중…'}</div>`;
     const open = d.open;
     const num = (id, key, ph, max) => `<input id="${id}" data-sbind="${key}" value="${esc(ST[key])}" type="number" inputmode="numeric" min="1" max="${max}" placeholder="${ph}"
         class="input-glass w-full px-3 py-3 text-lg text-center font-semibold">`;
     return `
     <section class="fade-in pb-28">
-      ${!open ? `<div class="glass mb-4 px-5 py-3 text-sm text-amber-900" style="--glass-tint:rgba(254,243,199,.6)">지금은 접수 시간이 아닙니다. 선생님 안내를 기다려 주세요.</div>` : ''}
+      ${!open ? `<div class="glass mb-4 px-5 py-3 text-sm text-amber-900" style="--glass-tint:rgba(254,243,199,.6)">${ERR.closed}</div>` : ''}
       <div class="glass p-5 mb-5">
         <p class="text-sm font-semibold mb-3">① 내 정보</p>
         <div class="grid grid-cols-3 gap-3">
@@ -1012,14 +1226,14 @@ function bootStudent() {
       <p class="text-sm font-semibold mb-3 px-1">② 함께 실천하고 싶은 약속 고르기</p>
       <div class="grid sm:grid-cols-2 gap-4">
         ${d.cards.map(c => {
-          const full = c.count >= d.maxPer, picked = ST.sel === c.g;
+          const full = c.c >= d.maxPer, picked = ST.sel === c.g;
           return `<button data-sact="pick" data-g="${c.g}" ${full || !open ? 'disabled' : ''}
             class="glass glass-card ${full ? 'glass-muted' : ''} ${picked ? 'picked' : ''} text-left p-5 min-h-[130px]">
             <div class="flex items-center justify-between">
               <span class="text-xs font-semibold ${full ? 'text-slate-400' : 'text-teal-700'}">약속 ${c.g + 1}</span>
-              <span class="pill ${full ? 'bg-slate-300/60 text-slate-700' : picked ? 'bg-teal-600 text-white' : 'bg-white/60 text-slate-600'}">${full ? '마감' : picked ? '✓ 선택함' : `남은 자리 ${d.maxPer - c.count}`}</span>
+              <span class="pill ${full ? 'bg-slate-300/60 text-slate-700' : picked ? 'bg-teal-600 text-white' : 'bg-white/60 text-slate-600'}">${full ? '마감' : picked ? '✓ 선택함' : `남은 자리 ${d.maxPer - c.c}`}</span>
             </div>
-            <p class="font-serif text-lg leading-relaxed mt-3 ${full ? 'text-slate-400' : 'text-slate-900'}">“${esc(c.pledge)}”</p>
+            <p class="font-serif text-lg leading-relaxed mt-3 ${full ? 'text-slate-400' : 'text-slate-900'}">“${esc(c.p)}”</p>
           </button>`;
         }).join('')}
       </div>
@@ -1032,7 +1246,7 @@ function bootStudent() {
   function barHTML() {
     const d = ST.data;
     const ready = !!studentInfo() && ST.sel != null && d && d.open && ST.status === 'online' && !ST.pending;
-    return `<p class="flex-1 text-sm ${ST.err ? 'text-rose-700' : 'text-slate-600'} px-2">${esc(ST.err || (ST.pending ? '제출 중…' : ready ? '준비 완료! 제출하세요.' : '정보를 입력하고 약속을 골라 주세요.'))}</p>
+    return `<p class="flex-1 text-sm ${ST.err && !ST.pending ? 'text-rose-700' : 'text-slate-600'} px-2">${esc(ST.err || (ST.pending ? '제출 중…' : ready ? '준비 완료! 제출하세요.' : '정보를 입력하고 약속을 골라 주세요.'))}</p>
       <button data-sact="submit" ${ready ? '' : 'disabled'} class="btn btn-primary px-6 py-3 text-base font-semibold">${ST.pending ? '제출 중…' : '제출하기'}</button>`;
   }
   function render() {
@@ -1046,7 +1260,7 @@ function bootStudent() {
     const el = e.target.closest('[data-sbind]');
     if (!el) return;
     ST[el.dataset.sbind] = el.value;
-    ST.err = '';
+    if (!ST.pending) ST.err = '';
     // 입력 중에는 전체를 다시 그리지 않고 하단 바만 갱신(커서 위치 유지)
     const bar = $('#sBar');
     if (bar) bar.innerHTML = barHTML();
@@ -1057,11 +1271,11 @@ function bootStudent() {
     const act = btn.dataset.sact;
     if (act === 'pick') { ST.sel = +btn.dataset.g; ST.err = ''; render(); }
     else if (act === 'submit') submit();
-    else if (act === 'next') { ST.done = null; render(); window.scrollTo(0, 0); }
+    else if (act === 'next') { ST.done = null; ST.data = null; connect(); window.scrollTo(0, 0); }
     else if (act === 'retry') connect();
     else if (act === 'enter') {
-      const code = ($('#codeInput').value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-      if (code.length !== 6) return toast('6자리 코드를 입력하세요.');
+      const code = cleanCode($('#codeInput').value);
+      if (code.length !== CODE_LEN) return toast('8자리 코드를 입력하세요.');
       location.search = '?room=' + code;
     }
   });
