@@ -217,8 +217,14 @@ const ERR = {
   buddy: '버디는 지원할 수 없습니다.',
   dup: '이미 제출한 학생입니다. 바꾸고 싶으면 선생님께 말씀하세요.',
   full: '이 약속은 마감되었습니다. 다른 약속을 골라 주세요.',
+  sex: '성별(남학생/여학생)을 선택하세요.',
+  sexfull: '이 약속은 같은 성별 자리가 모두 찼습니다. 다른 약속을 골라 주세요.',
   invalid: '잘못된 선택입니다.'
 };
+
+const SEX = { M: '남', F: '여' };
+// 엑셀 내보내기 라이브러리(SheetJS): 버튼을 누를 때만 불러옴
+const XLSX_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 
 const params = new URLSearchParams(location.search);
 const IS_STUDENT = params.has('room') || params.has('join');
@@ -270,7 +276,8 @@ function sanitizeStudent(s) {
   const int = (v, lo, hi) => { const n = Number(v); return Number.isInteger(n) && n >= lo && n <= hi ? n : null; };
   const grade = int(s.grade, 1, 6), cls = int(s.cls, 1, 30), no = int(s.no, 1, 60);
   const name = String(s.name ?? '').trim().slice(0, 12);
-  return grade && cls && no && name ? { grade, cls, no, name } : null;
+  const sex = SEX[s.sex] ? s.sex : null;
+  return grade && cls && no && name && sex ? { grade, cls, no, name, sex } : null;
 }
 
 /* =========================================================
@@ -336,8 +343,8 @@ const relayErrorText = (e) => e && e.status === 429
 
 /* =========================================================
    모둠원 데이터
-   - 교사 입력: { name }
-   - QR 제출:  { name, grade, cls, no, via: 'qr' }
+   - 교사 입력: { name, sex }
+   - QR 제출:  { name, sex, grade, cls, no, via: 'qr' }
    ========================================================= */
 const memberKey = (m) => m.grade ? `${m.grade}-${m.cls}-${m.no}` : 'n:' + m.name;
 const memberLabel = (m) => m.grade ? `${m.grade}-${m.cls}-${m.no} ${m.name}` : m.name;
@@ -355,12 +362,16 @@ function freshState() {
     step: 1,
     shuffle: true,
     maxPer: 4,
+    genderOn: true,                               // 성별 상한 사용
+    capM: 2,                                      // 모둠별 남학생 상한
+    capF: 2,                                      // 모둠별 여학생 상한
     mode: 'qr',                                   // 'qr' 학생 태블릿 | 'teacher' 교사 입력
     room: '',                                     // QR 방 코드
     qrOpen: true,                                 // 학생 제출 접수 여부
     publicUrl: '',                                // 파일로 열었을 때 학생용 공개 주소
     buddies: Array.from({ length: GROUPS }, () => ({ name: '', pledge: '' })),
     roster: [],
+    rosterSex: {},                                // 명단에 적은 성별 {이름: 'M'|'F'}
     rosterDraft: '',
     members: Array.from({ length: GROUPS }, () => []),
     roles: Array.from({ length: GROUPS }, () => ({ rep: '', rec: '', mgr: '' })),
@@ -369,6 +380,7 @@ function freshState() {
     results: [],                                  // 학생에게 돌려줄 최근 제출 결과
     seen: [],                                     // 이미 처리한 제출 ID(중복 처리 방지)
     current: '',
+    currentSex: '',
     teacherView: false,
     revealed: false,
     view3: 'tags'                                 // 3단계 보기: 'tags' 이름표 | 'contract' 서약서
@@ -390,6 +402,10 @@ const memberNames = () => allMembers().map(m => m.name);
 const buddyNames = () => S.buddies.map(b => b.name.trim());
 const unassigned = () => S.roster.filter(n => !memberNames().includes(n));
 const isAccepting = () => S.mode === 'qr' && S.step === 2 && S.qrOpen;
+const countSex = (g, sex) => S.members[g].filter(m => m.sex === sex).length;
+const capOf = (sex) => sex === 'M' ? S.capM : S.capF;
+const sexFull = (g, sex) => S.genderOn && countSex(g, sex) >= capOf(sex);
+const groupFull = (g) => S.members[g].length >= S.maxPer || (S.genderOn && sexFull(g, 'M') && sexFull(g, 'F'));
 
 // 교사 입력·QR 제출 공통 배치 로직. 실패 시 ERR 코드 반환
 function addMember(g, m) {
@@ -400,6 +416,8 @@ function addMember(g, m) {
   if (allMembers().some(x => memberKey(x) === key)) return 'dup';
   if (!m.grade && memberNames().includes(m.name)) return 'dup';
   if (S.members[g].length >= S.maxPer) return 'full';
+  if (S.genderOn && !SEX[m.sex]) return 'sex';
+  if (sexFull(g, m.sex)) return 'sexfull';
   S.members[g].push(m);
   S.history.push({ g, key });
   return null;
@@ -444,7 +462,8 @@ function statePayload() {
   // 학생 태블릿에는 버디 이름 없이 약속·인원·제출 결과만 전달
   return {
     t: 'state', open: isAccepting(), maxPer: S.maxPer,
-    cards: S.buddies.map((b, g) => ({ g, p: b.pledge, c: S.members[g].length })),
+    gs: S.genderOn ? { M: S.capM, F: S.capF } : null,   // 성별 상한(끄면 null)
+    cards: S.buddies.map((b, g) => ({ g, p: b.pledge, c: S.members[g].length, m: countSex(g, 'M'), f: countSex(g, 'F') })),
     r: S.results
   };
 }
@@ -611,8 +630,9 @@ function badgeHTML(i) {
 function renderStep2() {
   const qr = S.mode === 'qr';
   if (!qr && S.roster.length && (!S.current || memberNames().includes(S.current))) S.current = unassigned()[0] || '';
+  if (!qr && S.rosterSex[S.current]) S.currentSex = S.rosterSex[S.current];
   const placed = allMembers().length;
-  const capacity = GROUPS * S.maxPer;
+  const capacity = GROUPS * (S.genderOn ? Math.min(S.maxPer, S.capM + S.capF) : S.maxPer);
   const rosterDone = S.roster.length > 0 && unassigned().length === 0;
 
   const modeSwitch = `
@@ -656,9 +676,9 @@ function renderStep2() {
   const rosterPanel = `
     <div class="glass p-4">
       <h3 class="text-sm font-semibold mb-1">학생 명단 (선택)</h3>
-      <p class="text-xs text-slate-500 mb-2">한 줄에 한 명 또는 쉼표로 구분. 적용하면 다음 학생이 자동으로 지정됩니다.</p>
+      <p class="text-xs text-slate-500 mb-2">한 줄에 한 명 또는 쉼표로 구분. 이름 뒤에 <b>남/여</b>를 붙이면 성별도 자동 지정됩니다(예: 김하늘 여).</p>
       <textarea id="rosterText" data-bind="rosterDraft" rows="5" class="input-glass w-full px-3 py-2 text-sm resize-y"
-        placeholder="김하늘&#10;이도윤&#10;...">${esc(S.rosterDraft)}</textarea>
+        placeholder="김하늘 여&#10;이도윤 남&#10;...">${esc(S.rosterDraft)}</textarea>
       <div class="flex items-center justify-between mt-2">
         <span class="text-xs text-slate-500">${S.roster.length ? `명단 ${S.roster.length}명 · 남은 학생 ${unassigned().length}명` : '명단 없음'}</span>
         <button data-act="applyRoster" class="btn btn-dark text-xs px-3 py-1.5">명단 적용</button>
@@ -690,6 +710,19 @@ function renderStep2() {
               ${[2, 3, 4, 5, 6].map(n => `<option value="${n}" ${S.maxPer === n ? 'selected' : ''}>${n}명</option>`).join('')}
             </select>
           </label>
+          <label class="mt-3 text-sm text-slate-700 flex items-center gap-2">
+            <input type="checkbox" data-bind="genderOn" ${S.genderOn ? 'checked' : ''} class="accent-teal-600 w-4 h-4">
+            성별 상한 사용 (한쪽 성별 쏠림 방지)
+          </label>
+          ${S.genderOn ? `
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            ${[['capM', '남'], ['capF', '여']].map(([k, label]) => `
+              <label class="text-xs text-slate-600 flex items-center justify-between gap-1 whitespace-nowrap">${label} 최대
+                <select data-bind="${k}" class="input-glass px-2 py-1 text-sm">
+                  ${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}" ${S[k] === n ? 'selected' : ''}>${n}명</option>`).join('')}
+                </select></label>`).join('')}
+          </div>
+          ${S.capM + S.capF < S.maxPer ? `<p class="text-[11px] text-amber-700 mt-2">남녀 상한의 합(${S.capM + S.capF}명)이 최대 인원(${S.maxPer}명)보다 작아, 모둠당 최대 ${S.capM + S.capF}명까지만 배치됩니다.</p>` : ''}` : ''}
           <p class="text-xs text-slate-500 mt-2">최대 수용 ${capacity}명 · 현재 배치 <b class="text-slate-800">${placed}명</b></p>
         </div>
         ${qr ? '' : rosterPanel}
@@ -710,6 +743,9 @@ function renderStep2() {
             <div class="mt-3 flex flex-wrap items-center gap-3">
               <span class="text-sm text-slate-600">지금 선택할 친구</span>
               ${currentPicker}
+              <div class="seg">
+                ${Object.entries(SEX).map(([k, v]) => `<button data-act="curSex" data-sex="${k}" class="${S.currentSex === k ? 'on' : ''}">${v}학생</button>`).join('')}
+              </div>
             </div>`}
         </div>
 
@@ -717,11 +753,13 @@ function renderStep2() {
 
         <div class="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
           ${S.buddies.map((b, g) => {
-            const count = S.members[g].length, full = count >= S.maxPer;
+            const count = S.members[g].length, full = groupFull(g);
+            // 교사 입력 모드에서 고른 성별 자리가 찼으면 해당 카드만 비활성
+            const blocked = full || (!qr && S.currentSex && sexFull(g, S.currentSex));
             return `
             <div class="flex flex-col">
-              <button data-act="join" data-g="${g}" ${full || qr ? 'disabled' : ''}
-                class="glass glass-card ${full ? 'glass-muted' : ''} w-full flex-1 text-left p-5 ${qr && !full ? 'cursor-default' : ''}">
+              <button data-act="join" data-g="${g}" ${blocked || qr ? 'disabled' : ''}
+                class="glass glass-card ${blocked ? 'glass-muted' : ''} w-full flex-1 text-left p-5 ${qr && !full ? 'cursor-default' : ''}">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-semibold tracking-wide ${full ? 'text-slate-400' : 'text-teal-700'}">모둠 ${g + 1}</span>
                   <span class="pill ${full ? 'bg-slate-300/60 text-slate-700' : 'bg-teal-100/70 text-teal-800'}">${full ? '마감' : '지원 가능'}</span>
@@ -732,10 +770,11 @@ function renderStep2() {
                   ${Array.from({ length: S.maxPer }, (_, k) => `<span class="w-3 h-3 rounded-full ${k < count ? (full ? 'bg-slate-400' : 'bg-teal-500 shadow-[0_0_8px_rgba(20,184,166,.6)]') : 'border border-slate-300 bg-white/50'}"></span>`).join('')}
                   <span class="text-xs text-slate-500 ml-1">${count}/${S.maxPer}</span>
                 </div>
+                ${S.genderOn ? `<p class="text-xs mt-2 text-slate-500">${sexBadge(g, 'M')} · ${sexBadge(g, 'F')}</p>` : ''}
               </button>
               ${S.teacherView ? `
                 <div class="mt-2 flex flex-wrap gap-1">
-                  ${S.members[g].map(m => `<span class="text-xs chip rounded-full px-2 py-0.5">${esc(memberLabel(m))}
+                  ${S.members[g].map(m => `<span class="text-xs chip rounded-full px-2 py-0.5">${esc(memberLabel(m))}${m.sex ? ` <span class="text-slate-400">${SEX[m.sex]}</span>` : ''}
                     <button data-act="remove" data-g="${g}" data-key="${esc(memberKey(m))}" class="text-rose-500 ml-1" title="빼기">×</button></span>`).join('') || '<span class="text-xs text-slate-400">아직 없음</span>'}
                 </div>` : ''}
             </div>`;
@@ -759,6 +798,11 @@ function renderStep2() {
         </div>
       </div>` : ''}
   </section>`;
+}
+
+function sexBadge(g, sex) {
+  const n = countSex(g, sex), cap = capOf(sex), full = n >= cap;
+  return `<span class="${full ? 'text-rose-600 font-semibold' : ''}">${SEX[sex]} ${n}/${cap}${full ? ' 마감' : ''}</span>`;
 }
 
 /* ---------- 3단계: 모둠 공개 · 이름표 · 협동 서약서 ---------- */
@@ -874,6 +918,7 @@ function renderStep3() {
             <button data-act="printAll" class="btn btn-primary text-sm px-4 py-2">인쇄: A4 한 장(전체)</button>
             <button data-act="printEach" class="btn btn-dark text-sm px-4 py-2">인쇄: 모둠별 한 장</button>
             <button data-act="copyAll" class="btn btn-glass text-sm px-4 py-2">전체 텍스트 복사</button>`}
+          <button data-act="exportXlsx" class="btn btn-dark text-sm px-4 py-2">📥 엑셀로 내려받기</button>
           <button data-act="backTo2" class="btn text-sm px-4 py-2 text-slate-500 hover:bg-white/40">← 배치 수정</button>
         </div>
       </div>
@@ -915,6 +960,48 @@ function doPrint(mode) {
   setTimeout(() => { window.print(); setTimeout(clear, 500); }, 50);
 }
 
+/* ---------- 엑셀 내보내기 ---------- */
+function loadXlsx() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise((ok, fail) => {
+    const sc = document.createElement('script');
+    sc.src = XLSX_SRC; sc.onload = () => ok(window.XLSX); sc.onerror = fail;
+    document.head.appendChild(sc);
+  });
+}
+async function exportXlsx() {
+  let X;
+  try { X = await loadXlsx(); } catch (e) { return toast('엑셀 기능을 불러오지 못했습니다. 인터넷 연결을 확인하세요.'); }
+  const roleOf = (g, m) => (ROLES.find(r => S.roles[g][r.key] === memberKey(m)) || {}).label || '';
+  // 시트 1: 한 줄에 한 명(정렬·필터용)
+  const rows = [['모둠', '구분', '이름', '성별', '학년', '반', '번호', '역할', '버디 도움 서약']];
+  S.buddies.forEach((b, g) => {
+    rows.push([g + 1, '버디', b.name, '', '', '', '', 'Buddy', b.pledge]);
+    S.members[g].forEach(m => rows.push([g + 1, '모둠원', m.name, SEX[m.sex] || '', m.grade || '', m.cls || '', m.no || '', roleOf(g, m), b.pledge]));
+  });
+  // 시트 2: 한 줄에 한 모둠(게시·확인용)
+  const most = Math.max(1, ...S.members.map(m => m.length));
+  const sum = [['모둠', '버디', '도움 서약', ...Array.from({ length: most }, (_, i) => `모둠원 ${i + 1}`), '남', '여', '인원(버디 제외)']];
+  S.buddies.forEach((b, g) => {
+    const mem = S.members[g].map(m => m.name);
+    sum.push([g + 1, b.name, b.pledge, ...Array.from({ length: most }, (_, i) => mem[i] || ''), countSex(g, 'M'), countSex(g, 'F'), mem.length]);
+  });
+  const sheet = (aoa, widths) => { const ws = X.utils.aoa_to_sheet(aoa); ws['!cols'] = widths.map(w => ({ wch: w })); return ws; };
+  const wb = X.utils.book_new();
+  X.utils.book_append_sheet(wb, sheet(rows, [6, 8, 12, 6, 6, 6, 6, 14, 40]), '모둠 편성');
+  X.utils.book_append_sheet(wb, sheet(sum, [6, 12, 40, ...Array(most).fill(12), 5, 5, 14]), '모둠별 요약');
+  const d = new Date(), pad = (n) => String(n).padStart(2, '0');
+  const blob = new Blob([X.write(wb, { bookType: 'xlsx', type: 'array' })],
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  // 일부 브라우저가 한글 파일명을 무시하므로 영문 파일명 사용
+  a.download = `groups_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast('엑셀 파일을 내려받았습니다.');
+}
+
 /* ---------- 렌더 ---------- */
 function render() {
   ensureHost();
@@ -944,9 +1031,22 @@ document.addEventListener('input', (e) => {
     const i = +el.dataset.i;
     S.buddies[i][key] = el.value;
     const badge = $('#badge-' + i); if (badge) badge.innerHTML = badgeHTML(i);
-  } else if (key === 'current') S.current = el.value.trim();
+  } else if (key === 'current') {
+    S.current = el.value.trim();
+    // 명단에서 고른 경우: 명단의 성별로 맞춤(표기가 없으면 비워서 다시 고르게 함)
+    if (el.tagName === 'SELECT') { S.currentSex = S.rosterSex[S.current] || ''; render(); return; }
+  }
   else if (key === 'rosterDraft') S.rosterDraft = el.value;
   else if (key === 'shuffle') S.shuffle = el.checked;
+  else if (key === 'genderOn') { S.genderOn = el.checked; render(); return; }
+  else if (key === 'capM' || key === 'capF') {
+    const n = +el.value, sex = key === 'capM' ? 'M' : 'F';
+    if (S.members.some((_, g) => countSex(g, sex) > n)) {
+      toast(`이미 ${SEX[sex]}학생이 그보다 많이 배치된 모둠이 있습니다.`);
+      el.value = S[key]; return;
+    }
+    S[key] = n; render(); return;
+  }
   else if (key === 'publicUrl') { S.publicUrl = el.value; save(); return; }
   else if (key === 'maxPer') {
     const n = +el.value;
@@ -996,6 +1096,11 @@ document.addEventListener('click', (e) => {
     case 'mode':
       S.mode = btn.dataset.mode; render(); break;
 
+    case 'curSex':
+      S.currentSex = btn.dataset.sex; render(); break;
+
+    case 'exportXlsx': exportXlsx(); break;
+
     case 'toggleOpen':
       S.qrOpen = !S.qrOpen; render(); toast(S.qrOpen ? '학생 제출 접수를 열었습니다.' : '학생 제출 접수를 마감했습니다.'); break;
 
@@ -1010,21 +1115,28 @@ document.addEventListener('click', (e) => {
     case 'qrClose': UI.qrBig = false; render(); break;
 
     case 'applyRoster': {
-      const list = [...new Set(S.rosterDraft.split(/[\n,]/).map(s => s.trim()).filter(Boolean))]
-        .filter(n => !buddyNames().includes(n));
-      S.roster = list; S.current = '';
+      // "김하늘 여", "이도윤/남", "박서연(여)" 형식의 성별 표기 인식
+      const sexMap = {};
+      const list = [...new Set(S.rosterDraft.split(/[\n,]/).map(raw => {
+        const m = raw.trim().match(/^(.*?)[\s/(]*(남|여)\)?$/);
+        const name = (m && m[1].trim()) || raw.trim();
+        if (m && m[1].trim()) sexMap[name] = m[2] === '남' ? 'M' : 'F';
+        return name;
+      }).filter(Boolean))].filter(n => !buddyNames().includes(n));
+      S.roster = list; S.rosterSex = sexMap; S.current = '';
       render(); toast(list.length ? `명단 ${list.length}명을 적용했습니다.` : '명단을 비웠습니다.'); break;
     }
 
     case 'join': {
       const name = (S.current || '').trim();
       if (!name) return toast('먼저 선택할 친구의 이름을 입력하세요.');
-      const code = addMember(g, { name });
+      if (S.genderOn && !S.currentSex) return toast(ERR.sex);
+      const code = addMember(g, { name, sex: S.currentSex || undefined });
       if (code) return toast(code === 'dup' ? `${name} 학생은 이미 배치되었습니다.` : ERR[code]);
-      S.current = '';
+      S.current = ''; S.currentSex = '';
       render();
       toast(`${name} → 모둠 ${g + 1}의 약속에 함께합니다.`);
-      if (S.members.every(m => m.length >= S.maxPer) && (!S.roster.length || unassigned().length))
+      if (S.members.every((_, k) => groupFull(k)) && (!S.roster.length || unassigned().length))
         setTimeout(() => toast('모든 모둠이 마감되었습니다. 필요하면 최대 인원을 늘려 주세요.'), 2300);
       break;
     }
@@ -1101,11 +1213,13 @@ function bootStudent() {
   const ST = {
     room: cleanCode(params.get('room')),
     ch: null, sub: null, status: 'connecting', data: null, noHostTimer: null,
-    grade: saved.grade || '', cls: saved.cls || '', no: '', name: '',
+    grade: saved.grade || '', cls: saved.cls || '', no: '', name: '', sex: '',
     sel: null, pending: null, pendingTimer: null, done: null, err: ''
   };
 
-  const studentInfo = () => sanitizeStudent({ grade: ST.grade, cls: ST.cls, no: ST.no, name: ST.name });
+  const studentInfo = () => sanitizeStudent({ grade: ST.grade, cls: ST.cls, no: ST.no, name: ST.name, sex: ST.sex });
+  // 카드가 지금 이 학생에게 열려 있는지(전체 인원 + 내 성별 자리)
+  const cardOpen = (d, c) => c.c < d.maxPer && !(d.gs && ST.sex && (ST.sex === 'M' ? c.m : c.f) >= d.gs[ST.sex]);
 
   /* ---------- 연결: since=latest로 최신 약속 카드를 받고, 이후 변경·결과를 실시간 수신 ---------- */
   async function connect() {
@@ -1135,12 +1249,12 @@ function bootStudent() {
       const p = ST.pending; ST.pending = null;
       if (res.ok) {
         ST.done = { name: p.name, pledge: (d.cards[res.g] || {}).p || '' };
-        ST.no = ''; ST.name = ''; ST.sel = null; ST.err = '';
+        ST.no = ''; ST.name = ''; ST.sex = ''; ST.sel = null; ST.err = '';
         disconnect();                                  // 연결 수 절약: 완료 화면에서는 연결을 닫음
       } else ST.err = ERR[res.c] || '제출하지 못했습니다.';
     } else {
       const c = ST.sel != null && d.cards[ST.sel];
-      if (c && c.c >= d.maxPer) { ST.sel = null; ST.err = '고른 약속이 방금 마감되었습니다. 다른 약속을 골라 주세요.'; }
+      if (c && !cardOpen(d, c)) { ST.sel = null; ST.err = '고른 약속이 방금 마감되었습니다. 다른 약속을 골라 주세요.'; }
     }
     render();
   }
@@ -1149,7 +1263,7 @@ function bootStudent() {
     if (!s) { ST.err = ERR.bad; return render(); }
     if (ST.sel == null) { ST.err = '함께할 약속을 하나 골라 주세요.'; return render(); }
     const card = ST.data.cards[ST.sel];
-    if (!confirm(`${s.grade}학년 ${s.cls}반 ${s.no}번 ${s.name}\n\n“${card.p}”\n\n이 약속으로 제출할까요? 제출한 뒤에는 바꿀 수 없어요.`)) return;
+    if (!confirm(`${s.grade}학년 ${s.cls}반 ${s.no}번 ${s.name} (${SEX[s.sex]})\n\n“${card.p}”\n\n이 약속으로 제출할까요? 제출한 뒤에는 바꿀 수 없어요.`)) return;
     try { sessionStorage.setItem(STUDENT_KEY, JSON.stringify({ grade: s.grade, cls: s.cls })); } catch (e) { }
     ST.pending = { id: makeCode(10), name: s.name }; ST.err = '';
     render();
@@ -1218,20 +1332,28 @@ function bootStudent() {
           <label class="text-xs text-slate-500">반<div class="mt-1">${num('sCls', 'cls', '반', 30)}</div></label>
           <label class="text-xs text-slate-500">번호<div class="mt-1">${num('sNo', 'no', '번호', 60)}</div></label>
         </div>
-        <label class="block text-xs text-slate-500 mt-3">이름
-          <input id="sName" data-sbind="name" value="${esc(ST.name)}" maxlength="12" placeholder="이름" autocomplete="off"
-            class="input-glass w-full mt-1 px-4 py-3 text-lg font-semibold"></label>
+        <div class="grid grid-cols-[1fr_auto] gap-3 mt-3 items-end">
+          <label class="block text-xs text-slate-500">이름
+            <input id="sName" data-sbind="name" value="${esc(ST.name)}" maxlength="12" placeholder="이름" autocomplete="off"
+              class="input-glass w-full mt-1 px-4 py-3 text-lg font-semibold"></label>
+          <div class="text-xs text-slate-500">성별
+            <div class="seg mt-1 flex">
+              ${Object.entries(SEX).map(([k, v]) => `<button data-sact="sex" data-sex="${k}" class="${ST.sex === k ? 'on' : ''} !px-5 !py-2.5 !text-base">${v}학생</button>`).join('')}
+            </div>
+          </div>
+        </div>
       </div>
 
       <p class="text-sm font-semibold mb-3 px-1">② 함께 실천하고 싶은 약속 고르기</p>
       <div class="grid sm:grid-cols-2 gap-4">
         ${d.cards.map(c => {
-          const full = c.c >= d.maxPer, picked = ST.sel === c.g;
+          const full = !cardOpen(d, c), picked = ST.sel === c.g;
+          const left = d.gs ? (ST.sex ? `${SEX[ST.sex]}학생 자리 ${Math.max(0, d.gs[ST.sex] - (ST.sex === 'M' ? c.m : c.f))}` : `남 ${Math.max(0, d.gs.M - c.m)} · 여 ${Math.max(0, d.gs.F - c.f)} 남음`) : `남은 자리 ${d.maxPer - c.c}`;
           return `<button data-sact="pick" data-g="${c.g}" ${full || !open ? 'disabled' : ''}
             class="glass glass-card ${full ? 'glass-muted' : ''} ${picked ? 'picked' : ''} text-left p-5 min-h-[130px]">
             <div class="flex items-center justify-between">
               <span class="text-xs font-semibold ${full ? 'text-slate-400' : 'text-teal-700'}">약속 ${c.g + 1}</span>
-              <span class="pill ${full ? 'bg-slate-300/60 text-slate-700' : picked ? 'bg-teal-600 text-white' : 'bg-white/60 text-slate-600'}">${full ? '마감' : picked ? '✓ 선택함' : `남은 자리 ${d.maxPer - c.c}`}</span>
+              <span class="pill ${full ? 'bg-slate-300/60 text-slate-700' : picked ? 'bg-teal-600 text-white' : 'bg-white/60 text-slate-600'}">${full ? '마감' : picked ? '✓ 선택함' : left}</span>
             </div>
             <p class="font-serif text-lg leading-relaxed mt-3 ${full ? 'text-slate-400' : 'text-slate-900'}">“${esc(c.p)}”</p>
           </button>`;
@@ -1246,7 +1368,8 @@ function bootStudent() {
   function barHTML() {
     const d = ST.data;
     const ready = !!studentInfo() && ST.sel != null && d && d.open && ST.status === 'online' && !ST.pending;
-    return `<p class="flex-1 text-sm ${ST.err && !ST.pending ? 'text-rose-700' : 'text-slate-600'} px-2">${esc(ST.err || (ST.pending ? '제출 중…' : ready ? '준비 완료! 제출하세요.' : '정보를 입력하고 약속을 골라 주세요.'))}</p>
+    const hint = !ST.sex ? '성별을 선택해 주세요.' : '정보를 입력하고 약속을 골라 주세요.';
+    return `<p class="flex-1 text-sm ${ST.err && !ST.pending ? 'text-rose-700' : 'text-slate-600'} px-2">${esc(ST.err || (ST.pending ? '제출 중…' : ready ? '준비 완료! 제출하세요.' : hint))}</p>
       <button data-sact="submit" ${ready ? '' : 'disabled'} class="btn btn-primary px-6 py-3 text-base font-semibold">${ST.pending ? '제출 중…' : '제출하기'}</button>`;
   }
   function render() {
@@ -1270,6 +1393,13 @@ function bootStudent() {
     if (!btn || btn.disabled) return;
     const act = btn.dataset.sact;
     if (act === 'pick') { ST.sel = +btn.dataset.g; ST.err = ''; render(); }
+    else if (act === 'sex') {
+      ST.sex = btn.dataset.sex; ST.err = '';
+      // 바꾼 성별 기준으로 고른 카드가 막히면 선택 해제
+      const c = ST.data && ST.sel != null && ST.data.cards[ST.sel];
+      if (c && !cardOpen(ST.data, c)) { ST.sel = null; ST.err = '고른 약속은 이 성별 자리가 찼습니다. 다른 약속을 골라 주세요.'; }
+      render();
+    }
     else if (act === 'submit') submit();
     else if (act === 'next') { ST.done = null; ST.data = null; connect(); window.scrollTo(0, 0); }
     else if (act === 'retry') connect();
