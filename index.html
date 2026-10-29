@@ -429,7 +429,7 @@ function removeByKey(g, key) {
 
 /* ---------- 중계: 교사 PC가 제출을 받아 처리 ---------- */
 const NET = { ch: null, sub: null, starting: false, status: 'off', msg: '', room: '',
-  pubTimer: null, publishing: false, lastSent: '', retry: null };
+  pubTimer: null, publishing: false, lastSent: '', holdUntil: 0 };
 
 async function ensureHost() {
   if (S.mode !== 'qr' || S.step < 2) return;
@@ -455,18 +455,18 @@ async function ensureHost() {
 }
 function destroyHost() {
   if (NET.sub) NET.sub.close();
-  clearTimeout(NET.pubTimer); clearTimeout(NET.retry);
-  Object.assign(NET, { ch: null, sub: null, status: 'off', msg: '', room: '', lastSent: '' });
+  clearTimeout(NET.pubTimer);
+  Object.assign(NET, { ch: null, sub: null, status: 'off', msg: '', room: '', lastSent: '', holdUntil: 0 });
 }
-function statePayload() {
-  // 학생 태블릿에는 버디 이름 없이 약속·인원·제출 결과만 전달
+function baseState() {
+  // 학생 태블릿에는 버디 이름 없이 약속·인원만 전달(제출 결과는 publishState에서 덧붙임)
   return {
     t: 'state', open: isAccepting(), maxPer: S.maxPer,
     gs: S.genderOn ? { M: S.capM, F: S.capF } : null,   // 성별 상한(끄면 null)
-    cards: S.buddies.map((b, g) => ({ g, p: b.pledge, c: S.members[g].length, m: countSex(g, 'M'), f: countSex(g, 'F') })),
-    r: S.results
+    cards: S.buddies.map((b, g) => ({ g, p: b.pledge, c: S.members[g].length, m: countSex(g, 'M'), f: countSex(g, 'F') }))
   };
 }
+const hasUnsent = () => S.results.some(r => !r.pub);
 // 상태가 바뀌었을 때만, 짧게 모아서 전송(중계 서버 일일 한도 절약)
 function schedulePublish(force) {
   if (!NET.ch || NET.status === 'off') return;
@@ -476,24 +476,36 @@ function schedulePublish(force) {
 }
 async function publishState() {
   if (!NET.ch || NET.publishing) return;
-  const p = statePayload();
-  // ntfy 메시지 한도(4,096바이트)를 넘지 않도록 오래된 결과부터 덜어냄(암호화·base64 증가분 고려)
-  while (p.r.length && te.encode(JSON.stringify(p)).length > 2800) p.r = p.r.slice(1);
-  const json = JSON.stringify(p);
-  if (json === NET.lastSent) return;
+  // 전송 실패 후 대기 시간 안에는 보내지 않음(한도 초과 시 서버를 두드리지 않도록)
+  const wait = NET.holdUntil - Date.now();
+  if (wait > 0) { clearTimeout(NET.pubTimer); NET.pubTimer = setTimeout(publishState, wait); return; }
+  const base = baseState(), baseJson = JSON.stringify(base);
+  const unsent = S.results.filter(r => !r.pub);
+  if (baseJson === NET.lastSent && !unsent.length) return;
+  // 결과는 아직 안 보낸 것을 모두 싣고, 이미 보낸 것(재접속 학생용)은 자리가 남는 만큼만 실음.
+  // ntfy 메시지 한도(4,096바이트) 안에 들도록 암호화·base64 증가분을 고려해 2,800바이트로 제한
+  let sent = S.results.filter(r => r.pub), take = unsent;
+  const build = () => ({ ...base, r: [...sent, ...take].map(r => ({ i: r.i, ok: r.ok, c: r.c, g: r.g })) });
+  const tooBig = (p) => te.encode(JSON.stringify(p)).length > 2800;
+  let p = build();
+  while (tooBig(p) && sent.length) { sent = sent.slice(1); p = build(); }
+  while (tooBig(p) && take.length > 1) { take = take.slice(0, -1); p = build(); }   // 남은 결과는 다음 전송으로
   NET.publishing = true;
   try {
     await relayPublish(NET.ch.outTopic, NET.ch.key, p);
-    NET.lastSent = json;
+    NET.lastSent = baseJson;
+    take.forEach(r => { r.pub = 1; });
+    const pubs = S.results.filter(r => r.pub);
+    if (pubs.length > 40) { const old = new Set(pubs.slice(0, pubs.length - 40)); S.results = S.results.filter(r => !old.has(r)); }
+    save();
     if (NET.status === 'error') { NET.status = 'ready'; NET.msg = ''; refreshNet(); }
   } catch (e) {
     NET.status = 'error'; NET.msg = relayErrorText(e); refreshNet();
-    clearTimeout(NET.retry);
-    NET.retry = setTimeout(publishState, e.status === 429 ? 30000 : 8000);
+    NET.holdUntil = Date.now() + (e.status === 429 ? 30000 : 8000);
   } finally {
     NET.publishing = false;
   }
-  if (JSON.stringify(statePayload()) !== NET.lastSent && NET.status !== 'error') schedulePublish();
+  if (JSON.stringify(baseState()) !== NET.lastSent || hasUnsent()) schedulePublish();
 }
 
 function onStudentMsg(d) {
@@ -501,8 +513,7 @@ function onStudentMsg(d) {
   if (S.seen.includes(d.i)) return;
   S.seen.push(d.i); S.seen = S.seen.slice(-500);
   const done = (code, g) => {
-    S.results.push({ i: d.i, ok: code ? 0 : 1, c: code || '', g });
-    S.results = S.results.slice(-20);
+    S.results.push({ i: d.i, ok: code ? 0 : 1, c: code || '', g, pub: 0 });
   };
   const s = sanitizeStudent(d.s), g = Number(d.g);
   if (!isAccepting()) done('closed');
@@ -1243,7 +1254,7 @@ function bootStudent() {
     if (!d || d.t !== 'state' || !Array.isArray(d.cards)) return;
     ST.data = d;
     if (ST.status === 'nohost') ST.status = 'online';
-    const res = ST.pending && (d.r || []).find(x => x.i === ST.pending.id);
+    const res = ST.pending && (d.r || []).find(x => ST.pending.ids.includes(x.i));
     if (res) {
       clearTimeout(ST.pendingTimer);
       const p = ST.pending; ST.pending = null;
@@ -1265,15 +1276,24 @@ function bootStudent() {
     const card = ST.data.cards[ST.sel];
     if (!confirm(`${s.grade}학년 ${s.cls}반 ${s.no}번 ${s.name} (${SEX[s.sex]})\n\n“${card.p}”\n\n이 약속으로 제출할까요? 제출한 뒤에는 바꿀 수 없어요.`)) return;
     try { sessionStorage.setItem(STUDENT_KEY, JSON.stringify({ grade: s.grade, cls: s.cls })); } catch (e) { }
-    ST.pending = { id: makeCode(10), name: s.name }; ST.err = '';
+    // 응답이 늦어 다시 제출하는 경우 이전 ID의 결과도 계속 기다림
+    const id = makeCode(10);
+    const prev = ST.pending && ST.pending.stale ? ST.pending.ids : [];
+    ST.pending = { ids: [...prev, id], name: s.name, stale: false }; ST.err = '';
+    clearTimeout(ST.pendingTimer);
     render();
     try {
-      await relayPublish(ST.ch.inTopic, ST.ch.key, { t: 'join', i: ST.pending.id, g: ST.sel, s });
+      await relayPublish(ST.ch.inTopic, ST.ch.key, { t: 'join', i: id, g: ST.sel, s });
     } catch (e) {
-      ST.pending = null; ST.err = relayErrorText(e); return render();
+      ST.err = relayErrorText(e);
+      if (prev.length) ST.pending.stale = true; else ST.pending = null;
+      return render();
     }
-    // 응답이 늦으면 안내만 바꾸고 계속 기다림(늦게 와도 결과 반영)
-    ST.pendingTimer = setTimeout(() => { if (ST.pending) { ST.err = '선생님 화면의 응답을 기다리는 중입니다…'; render(); } }, 15000);
+    // 응답이 늦으면 다시 제출할 수 있게 함(같은 학생·같은 약속은 교사 PC에서 한 번만 반영)
+    ST.pendingTimer = setTimeout(() => {
+      if (!ST.pending) return;
+      ST.pending.stale = true; ST.err = '응답이 늦어지고 있습니다. [다시 제출]을 눌러 주세요.'; render();
+    }, 15000);
   }
 
   /* ---------- 화면 ---------- */
@@ -1367,10 +1387,11 @@ function bootStudent() {
   }
   function barHTML() {
     const d = ST.data;
-    const ready = !!studentInfo() && ST.sel != null && d && d.open && ST.status === 'online' && !ST.pending;
+    const waiting = ST.pending && !ST.pending.stale;
+    const ready = !!studentInfo() && ST.sel != null && d && d.open && ST.status === 'online' && !waiting;
     const hint = !ST.sex ? '성별을 선택해 주세요.' : '정보를 입력하고 약속을 골라 주세요.';
-    return `<p class="flex-1 text-sm ${ST.err && !ST.pending ? 'text-rose-700' : 'text-slate-600'} px-2">${esc(ST.err || (ST.pending ? '제출 중…' : ready ? '준비 완료! 제출하세요.' : hint))}</p>
-      <button data-sact="submit" ${ready ? '' : 'disabled'} class="btn btn-primary px-6 py-3 text-base font-semibold">${ST.pending ? '제출 중…' : '제출하기'}</button>`;
+    return `<p class="flex-1 text-sm ${ST.err && !waiting ? 'text-rose-700' : 'text-slate-600'} px-2">${esc(ST.err || (waiting ? '제출 중…' : ready ? '준비 완료! 제출하세요.' : hint))}</p>
+      <button data-sact="submit" ${ready ? '' : 'disabled'} class="btn btn-primary px-6 py-3 text-base font-semibold">${waiting ? '제출 중…' : ST.pending ? '다시 제출' : '제출하기'}</button>`;
   }
   function render() {
     keepFocus(() => {
