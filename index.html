@@ -1112,7 +1112,9 @@ async function importXlsx(file) {
   const missing = buddies.map((b, g) => b.name ? '' : g + 1).filter(Boolean);
   if (missing.length) return toast(`버디 정보가 없는 모둠이 있습니다(모둠 ${missing.join(', ')}). 이 앱에서 내려받은 엑셀인지 확인하세요.`);
   if (new Set(buddies.map(b => b.name)).size !== GROUPS) return toast('엑셀의 버디 이름이 겹칩니다.');
-  if ((allMembers().length || S.step > 1) && !confirm('지금 화면의 모둠 구성을 엑셀 내용으로 바꿀까요?')) return;
+  // 배치된 학생이나 입력 중인 버디가 있으면 덮어쓰기 전에 확인
+  const hasWork = allMembers().length || S.step > 1 || S.buddies.some(b => b.name.trim() || b.pledge.trim());
+  if (hasWork && !confirm('지금 화면의 내용을 엑셀 내용으로 바꿀까요?')) return;
   Object.assign(S, {
     buddies, members, roles, history: [], feed: [],
     maxPer: Math.min(6, Math.max(S.maxPer, ...members.map(m => m.length))),
