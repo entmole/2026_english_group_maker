@@ -369,7 +369,7 @@ function freshState() {
     room: '',                                     // QR 방 코드
     qrOpen: true,                                 // 학생 제출 접수 여부
     publicUrl: '',                                // 파일로 열었을 때 학생용 공개 주소
-    buddies: Array.from({ length: GROUPS }, () => ({ name: '', pledge: '' })),
+    buddies: Array.from({ length: GROUPS }, () => ({ name: '', pledge: '', sex: '' })),
     roster: [],
     rosterSex: {},                                // 명단에 적은 성별 {이름: 'M'|'F'}
     rosterDraft: '',
@@ -402,7 +402,13 @@ const memberNames = () => allMembers().map(m => m.name);
 const buddyNames = () => S.buddies.map(b => b.name.trim());
 const unassigned = () => S.roster.filter(n => !memberNames().includes(n));
 const isAccepting = () => S.mode === 'qr' && S.step === 2 && S.qrOpen;
-const countSex = (g, sex) => S.members[g].filter(m => m.sex === sex).length;
+// 성별 인원은 버디를 포함해 셈(버디도 모둠의 한 사람)
+const buddySex = (g, sex) => (S.buddies[g] && S.buddies[g].sex === sex ? 1 : 0);
+const countSex = (g, sex) => S.members[g].filter(m => m.sex === sex).length + buddySex(g, sex);
+// 모둠별로 받을 수 있는 학생 수(버디 제외): 최대 인원과 성별 남은 자리 중 작은 값
+const studentCap = (g) => S.genderOn
+  ? Math.min(S.maxPer, Math.max(0, S.capM - buddySex(g, 'M')) + Math.max(0, S.capF - buddySex(g, 'F')))
+  : S.maxPer;
 const capOf = (sex) => sex === 'M' ? S.capM : S.capF;
 const sexFull = (g, sex) => S.genderOn && countSex(g, sex) >= capOf(sex);
 const groupFull = (g) => S.members[g].length >= S.maxPer || (S.genderOn && sexFull(g, 'M') && sexFull(g, 'F'));
@@ -611,9 +617,16 @@ function renderStep1() {
           <span class="text-sm font-semibold text-teal-800">버디 ${i + 1}</span>
           <span id="badge-${i}">${badgeHTML(i)}</span>
         </div>
-        <label class="block text-xs text-slate-500 mb-1">이름</label>
-        <input id="bname-${i}" data-bind="name" data-i="${i}" value="${esc(b.name)}" maxlength="12" placeholder="이름"
-          class="input-glass w-full px-3 py-2 text-sm mb-3">
+        <div class="grid grid-cols-[1fr_auto] gap-2 mb-3 items-end">
+          <label class="block text-xs text-slate-500">이름
+            <input id="bname-${i}" data-bind="name" data-i="${i}" value="${esc(b.name)}" maxlength="12" placeholder="이름"
+              class="input-glass w-full px-3 py-2 text-sm mt-1"></label>
+          <div class="text-xs text-slate-500">성별
+            <div class="seg mt-1 flex">
+              ${Object.entries(SEX).map(([k, v]) => `<button data-act="buddySex" data-i="${i}" data-sex="${k}" class="${b.sex === k ? 'on' : ''} !px-3 !py-1.5">${v}</button>`).join('')}
+            </div>
+          </div>
+        </div>
         <label class="block text-xs text-slate-500 mb-1">도움 서약 (1문장)</label>
         <textarea id="pledge-${i}" data-bind="pledge" data-i="${i}" maxlength="60" rows="2" placeholder="나는 이번 단원에서 친구들을 이렇게 도울게요."
           class="input-glass w-full px-3 py-2 text-sm resize-none">${esc(b.pledge)}</textarea>
@@ -632,7 +645,7 @@ function renderStep1() {
 }
 function badgeHTML(i) {
   const b = S.buddies[i];
-  return (b.name.trim() && b.pledge.trim())
+  return (b.name.trim() && b.pledge.trim() && SEX[b.sex])
     ? '<span class="pill bg-teal-100/70 text-teal-800">작성 완료</span>'
     : '<span class="pill bg-white/50 text-slate-400">작성 중</span>';
 }
@@ -643,7 +656,8 @@ function renderStep2() {
   if (!qr && S.roster.length && (!S.current || memberNames().includes(S.current))) S.current = unassigned()[0] || '';
   if (!qr && S.rosterSex[S.current]) S.currentSex = S.rosterSex[S.current];
   const placed = allMembers().length;
-  const capacity = GROUPS * (S.genderOn ? Math.min(S.maxPer, S.capM + S.capF) : S.maxPer);
+  const caps = S.buddies.map((_, g) => studentCap(g));
+  const capacity = caps.reduce((a, n) => a + n, 0);
   const rosterDone = S.roster.length > 0 && unassigned().length === 0;
 
   const modeSwitch = `
@@ -723,7 +737,7 @@ function renderStep2() {
           </label>
           <label class="mt-3 text-sm text-slate-700 flex items-center gap-2">
             <input type="checkbox" data-bind="genderOn" ${S.genderOn ? 'checked' : ''} class="accent-teal-600 w-4 h-4">
-            성별 상한 사용 (한쪽 성별 쏠림 방지)
+            성별 상한 사용 (버디 포함, 한쪽 성별 쏠림 방지)
           </label>
           ${S.genderOn ? `
           <div class="mt-2 grid grid-cols-2 gap-2">
@@ -733,7 +747,8 @@ function renderStep2() {
                   ${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}" ${S[k] === n ? 'selected' : ''}>${n}명</option>`).join('')}
                 </select></label>`).join('')}
           </div>
-          ${S.capM + S.capF < S.maxPer ? `<p class="text-[11px] text-amber-700 mt-2">남녀 상한의 합(${S.capM + S.capF}명)이 최대 인원(${S.maxPer}명)보다 작아, 모둠당 최대 ${S.capM + S.capF}명까지만 배치됩니다.</p>` : ''}` : ''}
+          <p class="text-[11px] text-slate-500 mt-2">상한에는 <b>버디도 포함</b>됩니다. 예: 남 2명 상한 + 남자 버디 → 남학생 1명 더.</p>
+          ${caps.some(n => n < S.maxPer) ? `<p class="text-[11px] text-amber-700 mt-1">성별 상한 때문에 모둠별로 받을 수 있는 학생 수가 다릅니다: ${caps.map((n, g) => `${g + 1}모둠 ${n}명`).join(' · ')}</p>` : ''}` : ''}
           <p class="text-xs text-slate-500 mt-2">최대 수용 ${capacity}명 · 현재 배치 <b class="text-slate-800">${placed}명</b></p>
         </div>
         ${qr ? '' : rosterPanel}
@@ -748,7 +763,7 @@ function renderStep2() {
         <div class="glass p-5 mb-4">
           ${qr ? `
             <p class="text-sm text-slate-600">학생은 태블릿에서 <b class="text-slate-900">학년 · 반 · 번호 · 이름</b>을 입력하고, 함께 실천하고 싶은 <b class="text-slate-900">협동 약속</b>을 하나 고릅니다.</p>
-            <p class="text-xs text-slate-500 mt-1">버디 이름은 태블릿에도, 이 화면에도 표시되지 않습니다. 제출 현황은 몇 초 안에 반영됩니다.</p>`
+            <p class="text-xs text-slate-500 mt-1">버디 이름은 태블릿에도, 이 화면에도 표시되지 않습니다. 제출 현황은 몇 초 안에 반영됩니다.${S.genderOn ? ' 성별별 인원은 버디 성별이 드러나지 않도록 [배치 현황 보기]에서만 표시합니다.' : ''}</p>`
           : `
             <p class="text-sm text-slate-500">카드를 읽고, <b class="text-slate-800">내가 함께 실천하고 싶은 협동 약속</b>을 하나 고르세요.</p>
             <div class="mt-3 flex flex-wrap items-center gap-3">
@@ -781,7 +796,7 @@ function renderStep2() {
                   ${Array.from({ length: S.maxPer }, (_, k) => `<span class="w-3 h-3 rounded-full ${k < count ? (full ? 'bg-slate-400' : 'bg-teal-500 shadow-[0_0_8px_rgba(20,184,166,.6)]') : 'border border-slate-300 bg-white/50'}"></span>`).join('')}
                   <span class="text-xs text-slate-500 ml-1">${count}/${S.maxPer}</span>
                 </div>
-                ${S.genderOn ? `<p class="text-xs mt-2 text-slate-500">${sexBadge(g, 'M')} · ${sexBadge(g, 'F')}</p>` : ''}
+                ${S.genderOn && (S.teacherView || !qr) ? `<p class="text-xs mt-2 text-slate-500">${sexBadge(g, 'M')} · ${sexBadge(g, 'F')}</p>` : ''}
               </button>
               ${S.teacherView ? `
                 <div class="mt-2 flex flex-wrap gap-1">
@@ -987,12 +1002,12 @@ async function exportXlsx() {
   // 시트 1: 한 줄에 한 명(정렬·필터용)
   const rows = [['모둠', '구분', '이름', '성별', '학년', '반', '번호', '역할', '버디 도움 서약']];
   S.buddies.forEach((b, g) => {
-    rows.push([g + 1, '버디', b.name, '', '', '', '', 'Buddy', b.pledge]);
+    rows.push([g + 1, '버디', b.name, SEX[b.sex] || '', '', '', '', 'Buddy', b.pledge]);
     S.members[g].forEach(m => rows.push([g + 1, '모둠원', m.name, SEX[m.sex] || '', m.grade || '', m.cls || '', m.no || '', roleOf(g, m), b.pledge]));
   });
   // 시트 2: 한 줄에 한 모둠(게시·확인용)
   const most = Math.max(1, ...S.members.map(m => m.length));
-  const sum = [['모둠', '버디', '도움 서약', ...Array.from({ length: most }, (_, i) => `모둠원 ${i + 1}`), '남', '여', '인원(버디 제외)']];
+  const sum = [['모둠', '버디', '도움 서약', ...Array.from({ length: most }, (_, i) => `모둠원 ${i + 1}`), '남(버디 포함)', '여(버디 포함)', '인원(버디 제외)']];
   S.buddies.forEach((b, g) => {
     const mem = S.members[g].map(m => m.name);
     sum.push([g + 1, b.name, b.pledge, ...Array.from({ length: most }, (_, i) => mem[i] || ''), countSex(g, 'M'), countSex(g, 'F'), mem.length]);
@@ -1083,6 +1098,9 @@ document.addEventListener('click', (e) => {
       if (!confirm('모든 내용을 지우고 처음부터 시작할까요?')) return;
       destroyHost(); S = freshState(); render(); break;
 
+    case 'buddySex':
+      S.buddies[+btn.dataset.i].sex = btn.dataset.sex; render(); break;
+
     case 'example': {
       const i = +btn.dataset.i;
       S.buddies[i].pledge = EXAMPLES[+btn.dataset.k];
@@ -1094,6 +1112,7 @@ document.addEventListener('click', (e) => {
     case 'toStep2': {
       const names = buddyNames();
       if (S.buddies.some(b => !b.name.trim() || !b.pledge.trim())) return toast('6명 모두 이름과 도움 서약을 적어 주세요.');
+      if (S.buddies.some(b => !SEX[b.sex])) return toast('버디 6명의 성별을 모두 선택해 주세요.');
       if (new Set(names).size !== names.length) return toast('버디 이름이 겹칩니다.');
       // 이미 배치된 학생이 없을 때만 무작위로 섞음(배치 후 섞으면 모둠이 꼬임)
       if (S.shuffle && allMembers().length === 0) shuffleArr(S.buddies);
