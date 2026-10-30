@@ -109,6 +109,7 @@
   /* ===== 모둠 이름표 (A4 세로, 접이식) =====
      위 25% 여백 → 역할 칸(180° 회전) → Team name 칸 → 아래 여백.
      가운데 두 칸이 접었을 때 앞·뒷면이 됩니다. */
+  .drop-on { box-shadow: 0 0 0 3px rgba(20,184,166,.55), var(--glass-shadow) !important; }
   .tag-sheet {
     position: relative; width: 100%; aspect-ratio: 210 / 297; overflow: hidden;
     background: #fff; color: #111; container-type: inline-size;
@@ -175,7 +176,11 @@
         <h1 id="appTitle" class="font-serif text-xl sm:text-2xl font-bold">함께 배우는 모둠 만들기</h1>
         <p id="appSub" class="text-xs sm:text-sm text-slate-500 mt-0.5">Helper Pledge · Blind Grouping · Team Name Tag</p>
       </div>
-      <button id="resetBtn" data-act="reset" class="btn btn-glass text-sm px-4 py-1.5">새로 시작</button>
+      <div id="headerActs" class="flex gap-2">
+        <button data-act="importXlsx" class="btn btn-glass text-sm px-4 py-1.5">📤 엑셀 불러오기</button>
+        <button id="resetBtn" data-act="reset" class="btn btn-glass text-sm px-4 py-1.5">새로 시작</button>
+        <input id="xlsxFile" type="file" accept=".xlsx,.xls" class="hidden">
+      </div>
     </div>
     <nav id="stepper" class="mt-4"></nav>
   </div>
@@ -383,7 +388,7 @@ function freshState() {
     currentSex: '',
     teacherView: false,
     revealed: false,
-    view3: 'tags'                                 // 3단계 보기: 'tags' 이름표 | 'contract' 서약서
+    view3: 'groups'                               // 3단계 보기: 'groups' 모둠 구성 | 'tags' 이름표 | 'contract' 서약서
   };
 }
 function load() {
@@ -852,6 +857,51 @@ function tagSheetHTML(g) {
       <span class="tag-no">모둠 ${g + 1}</span>
     </div>`;
 }
+function memberRowHTML(g, m) {
+  const key = esc(memberKey(m));
+  return `
+    <li draggable="true" data-drag="${key}" data-g="${g}" class="flex items-center gap-2 rounded-xl bg-white/55 border border-white/80 px-3 py-2 text-sm cursor-grab active:cursor-grabbing">
+      <span class="text-slate-400 select-none" aria-hidden="true">⠿</span>
+      <span class="font-semibold truncate">${esc(m.name)}</span>
+      <span class="text-xs text-slate-500 whitespace-nowrap">${m.sex ? SEX[m.sex] : '성별 없음'}${m.grade ? ` · ${m.grade}-${m.cls}-${m.no}` : ''}</span>
+      <select data-move="${key}" data-g="${g}" class="input-glass ml-auto text-xs px-2 py-1" aria-label="${esc(m.name)} 모둠 이동">
+        <option value="">이동…</option>
+        ${S.buddies.map((_, k) => k === g ? '' : `<option value="${k}">모둠 ${k + 1}로</option>`).join('')}
+      </select>
+    </li>`;
+}
+function groupCardHTML(g) {
+  const b = S.buddies[g], n = S.members[g].length;
+  const warn = (bad) => bad ? 'text-rose-600 font-semibold' : '';
+  const sexInfo = S.genderOn
+    ? ['M', 'F'].map(x => `<span class="${warn(countSex(g, x) > capOf(x))}">${SEX[x]} ${countSex(g, x)}/${capOf(x)}</span>`).join(' · ')
+    : '';
+  return `
+  <div class="glass glass-strong p-4" data-drop="${g}">
+    <div class="flex items-center justify-between gap-2">
+      <span class="text-sm font-semibold text-teal-800">모둠 ${g + 1}</span>
+      <span class="text-xs text-slate-500"><span class="${warn(n > S.maxPer)}">모둠원 ${n}/${S.maxPer}</span>${sexInfo ? ' · ' + sexInfo : ''}</span>
+    </div>
+    <p class="mt-2 text-sm"><span class="text-xs text-slate-500">버디</span> <b>${esc(b.name)}</b> <span class="text-xs text-slate-500">${SEX[b.sex] || ''}</span></p>
+    <p class="font-serif text-xs text-slate-600 mt-1">“${esc(b.pledge)}”</p>
+    <ul class="mt-3 space-y-1.5">
+      ${S.members[g].map(m => memberRowHTML(g, m)).join('') || '<li class="text-xs text-slate-400 py-4 text-center border border-dashed border-slate-300 rounded-xl">학생을 여기로 끌어다 놓으세요</li>'}
+    </ul>
+  </div>`;
+}
+// 학생을 다른 모둠으로 옮김(교사 판단 우선: 상한을 넘어도 옮기되 경고)
+function moveMember(from, key, to) {
+  if (from === to || !S.members[to]) return;
+  const m = removeByKey(from, key);
+  if (!m) return;
+  S.members[to].push(m);
+  ROLES.forEach(r => { if (S.roles[from][r.key] === key) S.roles[from][r.key] = ''; });
+  S.history = S.history.filter(h => h.key !== key);
+  const over = S.members[to].length > S.maxPer || (S.genderOn && m.sex && countSex(to, m.sex) > capOf(m.sex));
+  render();
+  toast(over ? `${m.name} → 모둠 ${to + 1} (인원 상한을 넘었습니다)` : `${m.name} 학생을 모둠 ${to + 1}로 옮겼습니다.`);
+}
+
 function tagCardHTML(g) {
   const mem = S.members[g];
   const others = mem.filter(m => !ROLES.some(r => S.roles[g][r.key] === memberKey(m)));
@@ -927,16 +977,18 @@ function renderStep3() {
         ${S.buddies.map((_, g) => contractHTML(g, g)).join('')}
       </div></section>`;
   }
-  const tags = S.view3 !== 'contract';
+  const v = ['groups', 'tags', 'contract'].includes(S.view3) ? S.view3 : 'groups';
+  const tags = v === 'tags';
   const top = `
     <div class="no-print glass p-5 mb-5">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="seg">
+          <button data-act="view3" data-v="groups" class="${v === 'groups' ? 'on' : ''}">👥 모둠 구성</button>
           <button data-act="view3" data-v="tags" class="${tags ? 'on' : ''}">🏷️ 모둠 이름표</button>
-          <button data-act="view3" data-v="contract" class="${!tags ? 'on' : ''}">📜 협동 서약서</button>
+          <button data-act="view3" data-v="contract" class="${v === 'contract' ? 'on' : ''}">📜 협동 서약서</button>
         </div>
         <div class="flex flex-wrap gap-2">
-          ${tags ? `
+          ${v === 'groups' ? '' : tags ? `
             <button data-act="rolesRandom" class="btn btn-glass text-sm px-4 py-2">🎲 역할 무작위 배정</button>
             <button data-act="rolesClear" class="btn btn-glass text-sm px-4 py-2">역할 비우기</button>
             <button data-act="printTags" class="btn btn-primary text-sm px-4 py-2">인쇄: 모둠별 A4 이름표</button>`
@@ -948,10 +1000,13 @@ function renderStep3() {
           <button data-act="backTo2" class="btn text-sm px-4 py-2 text-slate-500 hover:bg-white/40">← 배치 수정</button>
         </div>
       </div>
+      ${v === 'groups' ? `<p class="text-xs text-slate-500 mt-3">학생을 <b>끌어다 다른 모둠에 놓거나</b>, 이름 옆 <b>[이동…]</b>에서 모둠을 고르면 옮겨집니다(태블릿·터치 화면은 [이동…] 사용). 인원·성별 상한을 넘으면 빨간색으로 표시됩니다.</p>` : ''}
       ${tags ? `<p class="text-xs text-slate-500 mt-3">역할 칸은 접었을 때 반대쪽에서 읽히도록 거꾸로 인쇄됩니다. 역할을 비워 두면 학생이 직접 쓰고, <b>Team name</b>은 모둠이 함께 정해 손으로 씁니다.</p>` : ''}
     </div>`;
   return `<section>${top}
-    ${tags
+    ${v === 'groups'
+      ? `<div id="groups" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">${S.buddies.map((_, g) => groupCardHTML(g)).join('')}</div>`
+      : tags
       ? `<div id="tags" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">${S.buddies.map((_, g) => tagCardHTML(g)).join('')}</div>`
       : `<div id="contracts" class="grid md:grid-cols-2 xl:grid-cols-3 gap-5">${S.buddies.map((_, g) => contractHTML(g, g)).join('')}</div>`}
   </section>`;
@@ -1028,6 +1083,45 @@ async function exportXlsx() {
   toast('엑셀 파일을 내려받았습니다.');
 }
 
+// 이 앱에서 내려받은 엑셀(“모둠 편성” 시트)을 읽어 모둠 구성을 복원
+async function importXlsx(file) {
+  let X;
+  try { X = await loadXlsx(); } catch (e) { return toast('엑셀 기능을 불러오지 못했습니다. 인터넷 연결을 확인하세요.'); }
+  let rows;
+  try {
+    const wb = X.read(await file.arrayBuffer(), { type: 'array' });
+    rows = X.utils.sheet_to_json(wb.Sheets['모둠 편성'] || wb.Sheets[wb.SheetNames[0]], { defval: '' });
+  } catch (e) { return toast('엑셀 파일을 읽지 못했습니다.'); }
+  const sexOf = (v) => ({ '남': 'M', '여': 'F', M: 'M', F: 'F' })[String(v).trim()] || '';
+  const cell = (r, k, max) => String(r[k] ?? '').trim().slice(0, max);
+  const buddies = Array.from({ length: GROUPS }, () => ({ name: '', pledge: '', sex: '' }));
+  const members = Array.from({ length: GROUPS }, () => []);
+  const roles = Array.from({ length: GROUPS }, () => ({ rep: '', rec: '', mgr: '' }));
+  let skipped = 0;
+  for (const r of rows) {
+    const g = Number(r['모둠']) - 1, name = cell(r, '이름', 12), sex = sexOf(r['성별']);
+    if (!Number.isInteger(g) || g < 0 || g >= GROUPS || !name) { skipped++; continue; }
+    if (cell(r, '구분', 10) === '버디') { buddies[g] = { name, sex, pledge: cell(r, '버디 도움 서약', 60) }; continue; }
+    const st = sanitizeStudent({ grade: r['학년'], cls: r['반'], no: r['번호'], name, sex });
+    const m = st ? { ...st, via: 'qr' } : (sex ? { name, sex } : { name });
+    if (members.flat().some(x => memberKey(x) === memberKey(m) || (!m.grade && x.name === name))) { skipped++; continue; }
+    members[g].push(m);
+    const role = ROLES.find(x => x.label === cell(r, '역할', 20));
+    if (role && !roles[g][role.key]) roles[g][role.key] = memberKey(m);
+  }
+  const missing = buddies.map((b, g) => b.name ? '' : g + 1).filter(Boolean);
+  if (missing.length) return toast(`버디 정보가 없는 모둠이 있습니다(모둠 ${missing.join(', ')}). 이 앱에서 내려받은 엑셀인지 확인하세요.`);
+  if (new Set(buddies.map(b => b.name)).size !== GROUPS) return toast('엑셀의 버디 이름이 겹칩니다.');
+  if ((allMembers().length || S.step > 1) && !confirm('지금 화면의 모둠 구성을 엑셀 내용으로 바꿀까요?')) return;
+  Object.assign(S, {
+    buddies, members, roles, history: [], feed: [],
+    maxPer: Math.min(6, Math.max(S.maxPer, ...members.map(m => m.length))),
+    step: 3, revealed: true, view3: 'groups'
+  });
+  render(); window.scrollTo(0, 0);
+  toast(`엑셀에서 버디 6명, 학생 ${members.flat().length}명을 불러왔습니다.${skipped ? ` (${skipped}줄 건너뜀)` : ''}`);
+}
+
 /* ---------- 렌더 ---------- */
 function render() {
   ensureHost();
@@ -1042,6 +1136,8 @@ function render() {
 
 /* ---------- 이벤트: 입력 ---------- */
 document.addEventListener('input', (e) => {
+  const mv = e.target.closest('[data-move]');
+  if (mv) { if (mv.value !== '') moveMember(+mv.dataset.g, mv.dataset.move, +mv.value); return; }
   const roleSel = e.target.closest('[data-role]');
   if (roleSel) {
     const g = +roleSel.dataset.g, role = roleSel.dataset.role, key = roleSel.value;
@@ -1085,7 +1181,38 @@ document.addEventListener('input', (e) => {
   save();
 });
 // 공개 주소는 입력을 마쳤을 때 QR을 다시 그림
-document.addEventListener('change', (e) => { if (e.target.id === 'publicUrl') render(); });
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'publicUrl') render();
+  if (e.target.id === 'xlsxFile' && e.target.files[0]) { importXlsx(e.target.files[0]); e.target.value = ''; }
+});
+// 모둠 구성: 끌어서 옮기기(마우스)
+let dragging = null;
+document.addEventListener('dragstart', (e) => {
+  const li = e.target.closest && e.target.closest('[data-drag]');
+  if (!li) return;
+  dragging = { g: +li.dataset.g, key: li.dataset.drag };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragging.key);
+});
+document.addEventListener('dragover', (e) => {
+  const box = dragging && e.target.closest('[data-drop]');
+  if (!box) return;
+  e.preventDefault();
+  document.querySelectorAll('.drop-on').forEach(el => el !== box && el.classList.remove('drop-on'));
+  box.classList.add('drop-on');
+});
+document.addEventListener('dragleave', (e) => {
+  const box = e.target.closest && e.target.closest('[data-drop]');
+  if (box && !box.contains(e.relatedTarget)) box.classList.remove('drop-on');
+});
+document.addEventListener('drop', (e) => {
+  const box = dragging && e.target.closest('[data-drop]');
+  if (!box) return;
+  e.preventDefault();
+  const d = dragging; dragging = null;
+  moveMember(d.g, d.key, +box.dataset.drop);
+});
+document.addEventListener('dragend', () => { dragging = null; document.querySelectorAll('.drop-on').forEach(el => el.classList.remove('drop-on')); });
 
 /* ---------- 이벤트: 클릭 ---------- */
 document.addEventListener('click', (e) => {
@@ -1130,6 +1257,8 @@ document.addEventListener('click', (e) => {
       S.currentSex = btn.dataset.sex; render(); break;
 
     case 'exportXlsx': exportXlsx(); break;
+
+    case 'importXlsx': $('#xlsxFile').click(); break;
 
     case 'toggleOpen':
       S.qrOpen = !S.qrOpen; render(); toast(S.qrOpen ? '학생 제출 접수를 열었습니다.' : '학생 제출 접수를 마감했습니다.'); break;
@@ -1235,7 +1364,7 @@ render();
    ######################################################### */
 function bootStudent() {
   $('#stepper').remove();
-  $('#resetBtn').remove();
+  $('#headerActs').remove();
   $('#appTitle').textContent = '우리 모둠 약속 고르기';
   $('#appSub').textContent = '버디의 이름은 비밀! 약속만 보고 골라요.';
 
